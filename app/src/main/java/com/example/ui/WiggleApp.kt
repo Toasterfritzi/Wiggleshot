@@ -357,8 +357,8 @@ fun PreviewAndControlLayout(
                                 android.graphics.Bitmap.createBitmap(bmp, x, y, kw, kh, matrix, true)
                             }
                             
-                            val aRot = cropAndTransform(bitmapA, uiState.zoomA)
-                            val bRot = cropAndTransform(bitmapB, uiState.zoomB)
+                            val aRot = cropAndTransform(bitmapA, viewModel.uiState.value.zoomA)
+                            val bRot = cropAndTransform(bitmapB, viewModel.uiState.value.zoomB)
                             
                             onCapture(aRot, bRot)
                             isCapturing = false
@@ -697,8 +697,20 @@ fun PreviewAndControlLayout(
                                         buffer.get(bytes)
                                         val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                         
+                                        val crop = image.cropRect
+                                        val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
+                                        val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
+                                        
+                                        // Account for potential rounding errors
+                                        val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
+                                        val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
+                                        val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
+                                        val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
+                                        
+                                        matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
+                                        
                                         bitmapA = android.graphics.Bitmap.createBitmap(
-                                            tempBitmap, 0, 0, tempBitmap.width, tempBitmap.height, matrix, true
+                                            tempBitmap, cx, cy, cw, ch, matrix, true
                                         )
                                         image.close()
                                         checkComplete()
@@ -719,8 +731,19 @@ fun PreviewAndControlLayout(
                                         buffer.get(bytes)
                                         val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                         
+                                        val crop = image.cropRect
+                                        val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
+                                        val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
+                                        
+                                        val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
+                                        val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
+                                        val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
+                                        val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
+                                        
+                                        matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
+                                        
                                         bitmapB = android.graphics.Bitmap.createBitmap(
-                                            tempBitmap, 0, 0, tempBitmap.width, tempBitmap.height, matrix, true
+                                            tempBitmap, cx, cy, cw, ch, matrix, true
                                         )
                                         image.close()
                                         checkComplete()
