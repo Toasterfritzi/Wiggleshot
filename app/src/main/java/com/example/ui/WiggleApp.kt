@@ -10,6 +10,7 @@ import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -39,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -77,8 +79,10 @@ fun WiggleApp(viewModel: WiggleViewModel) {
 
     val cameraPermissionState = rememberPermissionState(permission = Manifest.permission.CAMERA)
 
-    LaunchedEffect(Unit) {
-        viewModel.initCameraDiscovery(context)
+    LaunchedEffect(cameraPermissionState.status.isGranted) {
+        if (cameraPermissionState.status.isGranted) {
+            viewModel.initCameraDiscovery(context)
+        }
     }
 
     Scaffold(
@@ -283,195 +287,391 @@ fun PreviewAndControlLayout(
     onCapture: (Bitmap?, Bitmap?) -> Unit
 ) {
     val context = LocalContext.current
-    var liveBitmapA by remember { mutableStateOf<Bitmap?>(null) }
-    var liveBitmapB by remember { mutableStateOf<Bitmap?>(null) }
-    val coroutineScope = rememberCoroutineScope()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Dual viewfinders display
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                // Viewfinder A: Primary
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .border(1.dp, Color(0xFF232A38))
-                ) {
-                    CameraXViewfinder(
-                        lensId = uiState.primaryLens?.id ?: "0",
-                        zoomRatio = uiState.zoomA,
-                        onFrame = { liveBitmapA = it }
+    val previewViewA = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+    }
+    val previewViewB = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+    }
+
+    var cameraControlA by remember { mutableStateOf<CameraControl?>(null) }
+    var cameraControlB by remember { mutableStateOf<CameraControl?>(null) }
+    
+    // Hold references to active capturers
+    var activeCaptureA by remember { mutableStateOf<ImageCapture?>(null) }
+    var activeCaptureB by remember { mutableStateOf<ImageCapture?>(null) }
+    
+    var isCapturing by remember { mutableStateOf(false) }
+    val mainExecutor = androidx.core.content.ContextCompat.getMainExecutor(context)
+
+    // 1. Zoom adjustment binders
+    LaunchedEffect(uiState.zoomA, cameraControlA) {
+        cameraControlA?.setZoomRatio(uiState.zoomA)
+    }
+    LaunchedEffect(uiState.zoomB, cameraControlB) {
+        cameraControlB?.setZoomRatio(uiState.zoomB)
+    }
+
+    // 2. Camera structure lifecycle binder
+    LaunchedEffect(uiState.primaryLens, uiState.secondaryLens) {
+        val primary = uiState.primaryLens ?: return@LaunchedEffect
+        val secondary = uiState.secondaryLens ?: return@LaunchedEffect
+
+        try {
+            val cameraProvider = ProcessCameraProvider.getInstance(context).await(context)
+            cameraProvider.unbindAll()
+
+            val logicalIdA = primary.parentLogicalId ?: primary.id
+            val logicalIdB = secondary.parentLogicalId ?: secondary.id
+            
+            val builderA = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+            if (primary.parentLogicalId != null) {
+                androidx.camera.camera2.interop.Camera2Interop.Extender(builderA)
+                    .setPhysicalCameraId(primary.id)
+            }
+            val capA = builderA.build()
+            
+            val builderB = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+            if (secondary.parentLogicalId != null) {
+                androidx.camera.camera2.interop.Camera2Interop.Extender(builderB)
+                    .setPhysicalCameraId(secondary.id)
+            }
+            val capB = builderB.build()
+
+            activeCaptureA = capA
+            activeCaptureB = capB
+
+            if (logicalIdA == logicalIdB) {
+                // Shared Logical Camera Device Session!
+                val cameraSelector = findCameraSelector(cameraProvider, logicalIdA)
+
+                val previewBuilderA = Preview.Builder()
+                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                if (primary.parentLogicalId != null) {
+                    androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilderA)
+                        .setPhysicalCameraId(primary.id)
+                }
+                val previewA = previewBuilderA.build()
+                
+                val previewBuilderB = Preview.Builder()
+                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                if (secondary.parentLogicalId != null) {
+                    androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilderB)
+                        .setPhysicalCameraId(secondary.id)
+                }
+                val previewB = previewBuilderB.build()
+
+                try {
+                    val camera = cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        cameraSelector,
+                        previewA,
+                        previewB,
+                        capA,
+                        capB
                     )
-                    
-                    // Labelling overlay
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(12.dp)
-                            .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Column {
-                            var expanded by remember { mutableStateOf(false) }
-                            Text(
-                                text = "LENS A: ${uiState.primaryLens?.name ?: "Unknown"}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.clickable { expanded = true }
-                            )
-                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                                uiState.availableLenses.forEach { lens ->
-                                    DropdownMenuItem(
-                                        text = { Text(lens.name) },
-                                        onClick = {
-                                            viewModel.setPrimaryLens(lens)
-                                            expanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
 
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                            .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Column {
-                            Text(
-                                text = "ZOOM A: ${String.format("%.1fx", uiState.zoomA)}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF00FFCC)
-                            )
-                            Slider(
-                                value = uiState.zoomA,
-                                onValueChange = { viewModel.setZoomA(it) },
-                                valueRange = 1f..10f,
-                                modifier = Modifier.height(24.dp)
-                            )
-                        }
+                    previewA.setSurfaceProvider(previewViewA.surfaceProvider)
+                    previewB.setSurfaceProvider(previewViewB.surfaceProvider)
+                    cameraControlA = camera.cameraControl
+                    cameraControlB = camera.cameraControl // same session, maps control to both
+                } catch (e: Exception) {
+                     Log.e("CameraBinding", "Failed to bind 4 use cases in shared session.", e)
+                }
+            } else {
+                // Separate Logical Sessions
+                val cameraSelectorA = findCameraSelector(cameraProvider, logicalIdA)
+                
+                val previewBuilderA = Preview.Builder()
+                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                val previewA = previewBuilderA.build()
+
+                try {
+                    val cameraA = cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelectorA, previewA, capA)
+                    previewA.setSurfaceProvider(previewViewA.surfaceProvider)
+                    cameraControlA = cameraA.cameraControl
+                } catch (e: Exception) {
+                     Log.e("CameraBinding", "Failed A binding", e)
+                }
+                
+                try {
+                    val cameraSelectorB = findCameraSelector(cameraProvider, logicalIdB)
+                    val previewBuilderB = Preview.Builder()
+                        .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                    val previewB = previewBuilderB.build()
+
+                    val cameraB = cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelectorB, previewB, capB)
+                    previewB.setSurfaceProvider(previewViewB.surfaceProvider)
+                    cameraControlB = cameraB.cameraControl
+                } catch (e: Exception) {
+                    Log.e("CameraBinding", "Failed B binding", e)
+                }
+            }
+        } catch (e: Exception) {
+             Log.e("CameraBinding", "Failed binding", e)
+        }
+    }
+    
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Split screen viewfinder
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                AndroidView(
+                    factory = { previewViewA },
+                    modifier = Modifier.fillMaxSize()
+                )
+                Text(
+                    text = "A",
+                    color = Color(0xAAFFFFFF),
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
+            Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FFCC)))
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                AndroidView(
+                    factory = { previewViewB },
+                    modifier = Modifier.fillMaxSize()
+                )
+                Text(
+                    text = "B",
+                    color = Color(0xAAFFFFFF),
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
+        }
+        
+        // Settings Overlay / Lens Selection Top Left
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(12.dp)
+                .background(Color(0xD90D0F12), RoundedCornerShape(12.dp))
+                .border(1.dp, Color(0xFF232A38), RoundedCornerShape(12.dp))
+                .padding(12.dp)
+        ) {
+            Column {
+                Text(
+                    text = "LENS CONFIGURATION",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                var expandedA by remember { mutableStateOf(false) }
+                Column(modifier = Modifier.clickable { expandedA = true }.fillMaxWidth(0.6f).padding(vertical = 4.dp)) {
+                    Text(text = "LENS A", fontSize = 10.sp, color = Color(0xFF00FFCC), fontWeight = FontWeight.Bold)
+                    Text(
+                        text = uiState.primaryLens?.name ?: "Unknown",
+                        fontSize = 12.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                DropdownMenu(expanded = expandedA, onDismissRequest = { expandedA = false }) {
+                    uiState.availableLenses.forEach { lens ->
+                        DropdownMenuItem(
+                            text = { Text(lens.name, fontSize = 12.sp) },
+                            onClick = {
+                                viewModel.setPrimaryLens(lens)
+                                expandedA = false
+                            }
+                        )
                     }
                 }
-
-                // Viewfinder B: Secondary
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .border(1.dp, Color(0xFF232A38))
-                ) {
-                    CameraXViewfinder(
-                        lensId = uiState.secondaryLens?.id ?: "1",
-                        zoomRatio = uiState.zoomB,
-                        onFrame = { liveBitmapB = it }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                Box(modifier = Modifier.fillMaxWidth(0.6f).height(1.dp).background(Color(0xFF232A38)))
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                var expandedB by remember { mutableStateOf(false) }
+                Column(modifier = Modifier.clickable { expandedB = true }.fillMaxWidth(0.6f).padding(vertical = 4.dp)) {
+                    Text(text = "LENS B", fontSize = 10.sp, color = Color(0xFF00FFCC), fontWeight = FontWeight.Bold)
+                    Text(
+                        text = uiState.secondaryLens?.name ?: "Unknown",
+                        fontSize = 12.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium
                     )
-
-                    // Labelling overlay
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(12.dp)
-                            .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Column {
-                            var expanded by remember { mutableStateOf(false) }
-                            Text(
-                                text = "LENS B: ${uiState.secondaryLens?.name ?: "Unknown"}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.clickable { expanded = true }
-                            )
-                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                                uiState.availableLenses.forEach { lens ->
-                                    DropdownMenuItem(
-                                        text = { Text(lens.name) },
-                                        onClick = {
-                                            viewModel.setSecondaryLens(lens)
-                                            expanded = false
-                                        }
-                                    )
-                                }
+                }
+                DropdownMenu(expanded = expandedB, onDismissRequest = { expandedB = false }) {
+                    uiState.availableLenses.forEach { lens ->
+                        DropdownMenuItem(
+                            text = { Text(lens.name, fontSize = 12.sp) },
+                            onClick = {
+                                viewModel.setSecondaryLens(lens)
+                                expandedB = false
                             }
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                            .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Column {
-                            Text(
-                                text = "ZOOM B: ${String.format("%.1fx", uiState.zoomB)}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF00FFCC)
-                            )
-                            Slider(
-                                value = uiState.zoomB,
-                                onValueChange = { viewModel.setZoomB(it) },
-                                valueRange = 1f..10f,
-                                modifier = Modifier.height(24.dp)
-                            )
-                        }
+                        )
                     }
                 }
             }
+        }
 
-            // Central physical Shutter button bar
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF161920))
-                    .padding(vertical = 16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (uiState.isCapturing) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = Color(0xFF00FFCC), modifier = Modifier.size(36.dp))
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            "ALIGNING & INTERPOLATING...",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF00FFCC),
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                } else {
+        // Stereo Active indicator Top Right
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(12.dp)
+                .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "STEREO ACTIVE",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00FFCC)
+                )
+                Text(
+                    text = "Zwei Objektive live",
+                    fontSize = 8.sp,
+                    color = Color.LightGray
+                )
+            }
+        }
+        
+        // Zoom Controls Bottom Left
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth(0.5f)
+                .padding(start = 16.dp, bottom = 120.dp)
+                .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
+                .padding(8.dp)
+        ) {
+            Column {
+                Text(
+                    text = "ZOOM: ${String.format(java.util.Locale.US, "%.1fx", uiState.zoomA)}",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF00FFCC)
+                )
+                Slider(
+                    value = uiState.zoomA,
+                    onValueChange = { 
+                        viewModel.setZoomA(it)
+                        viewModel.setZoomB(it) 
+                    },
+                    valueRange = 1f..10f,
+                    modifier = Modifier.height(24.dp)
+                )
+            }
+        }
+
+        // Central physical Shutter button bar
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color(0xFF0F1115))
+                .padding(vertical = 24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isCapturing || uiState.isCapturing) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color(0xFF00FFCC), modifier = Modifier.size(36.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "ALIGNING & INTERPOLATING...",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF00FFCC),
+                        letterSpacing = 1.sp
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .padding(6.dp)
+                        .border(3.dp, Color.White, CircleShape)
+                        .clickable {
+                            isCapturing = true
+                            
+                            val cA = activeCaptureA
+                            val cB = activeCaptureB
+                            
+                            if (cA != null && cB != null) {
+                                var bitmapA: Bitmap? = null
+                                var bitmapB: Bitmap? = null
+                                
+                                val checkComplete = {
+                                    if (bitmapA != null && bitmapB != null) {
+                                        onCapture(bitmapA, bitmapB)
+                                        isCapturing = false
+                                    }
+                                }
+
+                                cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                                    override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
+                                        val matrix = android.graphics.Matrix()
+                                        matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+                                        
+                                        val buffer = image.planes[0].buffer
+                                        val bytes = ByteArray(buffer.remaining())
+                                        buffer.get(bytes)
+                                        val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                        
+                                        bitmapA = android.graphics.Bitmap.createBitmap(
+                                            tempBitmap, 0, 0, tempBitmap.width, tempBitmap.height, matrix, true
+                                        )
+                                        image.close()
+                                        checkComplete()
+                                    }
+                                    override fun onError(exception: ImageCaptureException) {
+                                        Log.e("Wiggle", "Capture A failed", exception)
+                                        isCapturing = false
+                                    }
+                                })
+                                
+                                cB.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                                    override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
+                                        val matrix = android.graphics.Matrix()
+                                        matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+                                        
+                                        val buffer = image.planes[0].buffer
+                                        val bytes = ByteArray(buffer.remaining())
+                                        buffer.get(bytes)
+                                        val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                        
+                                        bitmapB = android.graphics.Bitmap.createBitmap(
+                                            tempBitmap, 0, 0, tempBitmap.width, tempBitmap.height, matrix, true
+                                        )
+                                        image.close()
+                                        checkComplete()
+                                    }
+                                    override fun onError(exception: ImageCaptureException) {
+                                        Log.e("Wiggle", "Capture B failed", exception)
+                                        isCapturing = false
+                                    }
+                                })
+                            } else {
+                                Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
+                                isCapturing = false
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(76.dp)
-                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                            .padding(6.dp)
-                            .border(3.dp, Color.White, CircleShape)
-                            .clickable {
-                                onCapture(liveBitmapA, liveBitmapB)
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color(0xFF00FFCC), CircleShape)
-                        )
-                    }
+                            .size(56.dp)
+                            .background(Color(0xFF00FFCC), CircleShape)
+                    )
                 }
             }
         }
@@ -479,10 +679,23 @@ fun PreviewAndControlLayout(
 }
 
 
+private fun findCameraSelector(cameraProvider: ProcessCameraProvider, cameraId: String): CameraSelector {
+    for (info in cameraProvider.availableCameraInfos) {
+        val cid = androidx.camera.camera2.interop.Camera2CameraInfo.from(info).cameraId
+        if (cid == cameraId) {
+            return CameraSelector.Builder()
+                .addCameraFilter { cameraInfos ->
+                    cameraInfos.filter { it == info }
+                }
+                .build()
+        }
+    }
+    return CameraSelector.DEFAULT_BACK_CAMERA
+}
 
 @Composable
 fun WigglePlayerLayout(
-    capture: WiggleCapture,
+    capture: com.example.data.WiggleCapture,
     viewModel: WiggleViewModel,
     onCloseReview: () -> Unit
 ) {
@@ -657,13 +870,13 @@ fun EmptyGalleryState() {
 
 @Composable
 fun HistoryItemCard(
-    item: WiggleCapture,
+    item: com.example.data.WiggleCapture,
     isSelected: Boolean,
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val df = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val formattedTime = remember(item.timestamp) { df.format(Date(item.timestamp)) }
+    val df = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+    val formattedTime = remember(item.timestamp) { df.format(java.util.Date(item.timestamp)) }
 
     Box(
         modifier = Modifier
@@ -731,105 +944,6 @@ private suspend fun <T> com.google.common.util.concurrent.ListenableFuture<T>.aw
             }
         }, androidx.core.content.ContextCompat.getMainExecutor(context))
     }
-}
-
-@Composable
-fun CameraXViewfinder(
-    lensId: String,
-    zoomRatio: Float,
-    onFrame: (Bitmap) -> Unit
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    val previewView = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-        }
-    }
-
-    val preview = remember { Preview.Builder().build() }
-    val imageCapture = remember { ImageCapture.Builder().build() }
-
-    var cameraControlState by remember { mutableStateOf<CameraControl?>(null) }
-
-    // Unbind only this viewfinder's use cases when of disposal or lens alteration
-    DisposableEffect(lensId) {
-        onDispose {
-            try {
-                val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-                cameraProvider.unbind(preview, imageCapture)
-            } catch (e: Exception) {
-                Log.e("CameraXViewfinder", "Error during granular viewfinder unbind", e)
-            }
-        }
-    }
-
-    // 1. Separate dynamic zoom tracking state (Smooth adjustment, absolutely no unbind camera calls!)
-    LaunchedEffect(zoomRatio, cameraControlState) {
-        val activeControl = cameraControlState ?: return@LaunchedEffect
-        try {
-            activeControl.setZoomRatio(zoomRatio)
-        } catch (e: Exception) {
-            Log.e("CameraXViewfinder", "Error updating preview zoom smoothly dynamically", e)
-        }
-    }
-
-    // 2. Camera engine initialization and lifecycle provider binding
-    LaunchedEffect(lensId) {
-        try {
-            val cameraProvider = ProcessCameraProvider.getInstance(context).await(context)
-            
-            // Find cameras based on matching IDs
-            var selectedSelector = CameraSelector.DEFAULT_BACK_CAMERA
-            val availableInfo = cameraProvider.availableCameraInfos
-            for (info in availableInfo) {
-                val details = info.toString()
-                if (details.contains("id=$lensId") || details.contains("cameraId=$lensId")) {
-                    selectedSelector = CameraSelector.Builder()
-                        .addCameraFilter { cameraInfos ->
-                            cameraInfos.filter { it == info }
-                        }
-                        .build()
-                    break
-                }
-            }
-
-            try {
-                cameraProvider.unbind(preview, imageCapture)
-            } catch (e: Exception) {
-                // Ignore if not bound
-            }
-
-            val camera = cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                selectedSelector,
-                preview,
-                imageCapture
-            )
-
-            preview.setSurfaceProvider(previewView.surfaceProvider)
-            cameraControlState = camera.cameraControl
-            
-            // Apply initial zoom ratio gracefully
-            camera.cameraControl.setZoomRatio(zoomRatio)
-
-            // Dynamic background frame pulling for creating simulated stereoscopy pairs in-view
-            while (true) {
-                delay(120) // periodic high performance grab from screen
-                previewView.bitmap?.let { screenBitmap ->
-                    onFrame(screenBitmap)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("CameraXViewfinder", "Failed binding CameraX lifecycle context safely", e)
-        }
-    }
-
-    AndroidView(
-        factory = { previewView },
-        modifier = Modifier.fillMaxSize()
-    )
 }
 
 // Border utility for consistent Material design 

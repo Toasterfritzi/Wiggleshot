@@ -30,7 +30,8 @@ data class CameraLensDetails(
     val id: String,
     val name: String,
     val focalLength: Float?,
-    val isDefaultUltraWide: Boolean = false
+    val isDefaultUltraWide: Boolean = false,
+    val parentLogicalId: String? = null
 )
 
 data class WiggleUiState(
@@ -79,25 +80,72 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
                         val chars = cameraManager.getCameraCharacteristics(id)
                         val facing = chars.get(CameraCharacteristics.LENS_FACING)
                         if (facing == CameraCharacteristics.LENS_FACING_BACK) {
-                            val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            val mainFocal = focalLengths?.firstOrNull()
-                            
-                            // Guess if it's ultra wide based on typical focal length < 3.0mm
-                            val isUltraWide = mainFocal != null && mainFocal < 3.0f
-                            val labelName = when {
-                                isUltraWide -> "Camera #$id - Ultra-Wide (~0.5x)"
-                                mainFocal != null && mainFocal >= 6.0f -> "Camera #$id - Telephoto (~2x+)"
-                                else -> "Camera #$id - Standard Wide (1x)"
+                            val physicalIds = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                                chars.physicalCameraIds
+                            } else {
+                                emptySet<String>()
                             }
 
-                            lenses.add(
-                                CameraLensDetails(
-                                    id = id,
-                                    name = labelName,
-                                    focalLength = mainFocal,
-                                    isDefaultUltraWide = isUltraWide
+                            if (physicalIds.isNotEmpty()) {
+                                Log.d(TAG, "Camera $id has physical camera IDs: $physicalIds")
+                                // Add parent logical camera ID as an option too!
+                                val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                val mainFocal = focalLengths?.firstOrNull()
+                                val isUltraWide = mainFocal != null && mainFocal < 3.0f
+                                lenses.add(
+                                    CameraLensDetails(
+                                        id = id,
+                                        name = "Auto Smart Multi-Lens #$id",
+                                        focalLength = mainFocal,
+                                        isDefaultUltraWide = isUltraWide,
+                                        parentLogicalId = null
+                                    )
                                 )
-                            )
+
+                                // Add each individual physical lens
+                                for (pId in physicalIds) {
+                                    try {
+                                        val pChars = cameraManager.getCameraCharacteristics(pId)
+                                        val pFocal = pChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+                                        val isPUltraWide = pFocal != null && pFocal < 3.0f
+                                        val label = when {
+                                            isPUltraWide -> "Phys. Lens #$pId - Ultra-Wide (~0.5x)"
+                                            pFocal != null && pFocal >= 6.0f -> "Phys. Lens #$pId - Telephoto (~2x+)"
+                                            else -> "Phys. Lens #$pId - Wide Main (1x)"
+                                        }
+                                        lenses.add(
+                                            CameraLensDetails(
+                                                id = pId,
+                                                name = label,
+                                                focalLength = pFocal,
+                                                isDefaultUltraWide = isPUltraWide,
+                                                parentLogicalId = id
+                                            )
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Error querying physical lens $pId", e)
+                                    }
+                                }
+                            } else {
+                                // Simple individual back camera
+                                val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                val mainFocal = focalLengths?.firstOrNull()
+                                val isUltraWide = mainFocal != null && mainFocal < 3.0f
+                                val label = when {
+                                    isUltraWide -> "Camera #$id - Ultra-Wide (~0.5x)"
+                                    mainFocal != null && mainFocal >= 6.0f -> "Camera #$id - Telephoto (~2x+)"
+                                    else -> "Camera #$id - Standard Wide (1x)"
+                                }
+                                lenses.add(
+                                    CameraLensDetails(
+                                        id = id,
+                                        name = label,
+                                        focalLength = mainFocal,
+                                        isDefaultUltraWide = isUltraWide,
+                                        parentLogicalId = null
+                                    )
+                                )
+                            }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error checking characteristics of camera $id", e)
@@ -106,12 +154,18 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
 
                 if (lenses.isEmpty()) {
                     // Fallback mock definitions for testing/emulators where physical descriptors might be omitted
-                    lenses.add(CameraLensDetails("0", "Cam 0 - Standard (1x)", 4.25f, false))
-                    lenses.add(CameraLensDetails("1", "Cam 1 - Ultra-Wide (0.5x)", 1.85f, true))
+                    lenses.add(CameraLensDetails("0", "Cam 0 - Standard (1x)", 4.25f, false, null))
+                    lenses.add(CameraLensDetails("1", "Cam 1 - Ultra-Wide (0.5x)", 1.85f, true, null))
                 }
 
-                val primary = lenses.firstOrNull { !it.isDefaultUltraWide } ?: lenses.firstOrNull()
-                val secondary = lenses.firstOrNull { it.isDefaultUltraWide } ?: lenses.getOrNull(1) ?: lenses.firstOrNull()
+                // Default Primary: first non-ultrawide. Default Secondary: first ultrawide or second item.
+                val primary = lenses.firstOrNull { !it.isDefaultUltraWide && it.parentLogicalId != null }
+                    ?: lenses.firstOrNull { !it.isDefaultUltraWide }
+                    ?: lenses.firstOrNull()
+                val secondary = lenses.firstOrNull { it.isDefaultUltraWide && it.parentLogicalId != null }
+                    ?: lenses.firstOrNull { it.isDefaultUltraWide }
+                    ?: lenses.getOrNull(1)
+                    ?: lenses.firstOrNull()
 
                 _uiState.value = _uiState.value.copy(
                     availableLenses = lenses,
