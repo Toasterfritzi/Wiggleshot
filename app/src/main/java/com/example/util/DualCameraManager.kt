@@ -140,12 +140,7 @@ class DualCameraManager(
             builder.addTarget(surfaceA)
             builder.addTarget(surfaceB)
             
-            // Note: CONTROL_ZOOM_RATIO on logical camera affects both, we just use max or similar.
-            // But true independent zoom requires physical stream control or software cropping.
-            // For now, we set the logical zoom to the max of both and crop later if needed.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, maxOf(zoomA, zoomB))
-            }
+            // Zoom is handled via TextureView scaling and Bitmap cropping instead of CONTROL_ZOOM_RATIO
             
             captureSession?.setRepeatingRequest(builder.build(), null, backgroundHandler)
         } catch (e: Exception) {
@@ -164,10 +159,6 @@ class DualCameraManager(
             val builder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE) ?: return
             builder.addTarget(imageReaderA.surface)
             builder.addTarget(imageReaderB.surface)
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, maxOf(zoomA, zoomB))
-            }
             
             // Basic quality settings
             builder.set(CaptureRequest.JPEG_QUALITY, 95.toByte())

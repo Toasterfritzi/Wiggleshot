@@ -309,12 +309,17 @@ fun PreviewAndControlLayout(
     var usingDualManager by remember { mutableStateOf(false) }
 
     // 1. Zoom adjustment binders
-    LaunchedEffect(uiState.zoomA, uiState.zoomB, cameraControlA, dualManager) {
+    LaunchedEffect(uiState.zoomA, uiState.zoomB, cameraControlA, cameraControlB, dualManager, usingDualManager) {
         cameraControlA?.setZoomRatio(uiState.zoomA)
-        dualManager?.setZoom(uiState.zoomA, uiState.zoomB)
-    }
-    LaunchedEffect(uiState.zoomB, cameraControlB) {
         cameraControlB?.setZoomRatio(uiState.zoomB)
+        dualManager?.setZoom(uiState.zoomA, uiState.zoomB)
+        
+        if (usingDualManager) {
+            textureViewA.scaleX = uiState.zoomA
+            textureViewA.scaleY = uiState.zoomA
+            textureViewB.scaleX = uiState.zoomB
+            textureViewB.scaleY = uiState.zoomB
+        }
     }
 
     DisposableEffect(uiState.primaryLens, uiState.secondaryLens) {
@@ -340,10 +345,21 @@ fun PreviewAndControlLayout(
                         onDualCapture = { bytesA, bytesB ->
                             val bitmapA = android.graphics.BitmapFactory.decodeByteArray(bytesA, 0, bytesA.size)
                             val bitmapB = android.graphics.BitmapFactory.decodeByteArray(bytesB, 0, bytesB.size)
-                            val matrix = android.graphics.Matrix()
-                            matrix.postRotate(90f)
-                            val aRot = android.graphics.Bitmap.createBitmap(bitmapA, 0, 0, bitmapA.width, bitmapA.height, matrix, true)
-                            val bRot = android.graphics.Bitmap.createBitmap(bitmapB, 0, 0, bitmapB.width, bitmapB.height, matrix, true)
+                            
+                            val cropAndTransform = { bmp: android.graphics.Bitmap, zoom: Float ->
+                                val kw = (bmp.width / zoom).toInt()
+                                val kh = (bmp.height / zoom).toInt()
+                                val x = (bmp.width - kw) / 2
+                                val y = (bmp.height - kh) / 2
+                                val matrix = android.graphics.Matrix()
+                                matrix.postRotate(90f)
+                                matrix.postScale(zoom, zoom)
+                                android.graphics.Bitmap.createBitmap(bmp, x, y, kw, kh, matrix, true)
+                            }
+                            
+                            val aRot = cropAndTransform(bitmapA, uiState.zoomA)
+                            val bRot = cropAndTransform(bitmapB, uiState.zoomB)
+                            
                             onCapture(aRot, bRot)
                             isCapturing = false
                         }
@@ -595,6 +611,7 @@ fun PreviewAndControlLayout(
                         value = uiState.zoomA,
                         onValueChange = { viewModel.setZoomA(it) },
                         valueRange = 1f..10f,
+                        steps = 17,
                         modifier = Modifier.height(24.dp)
                     )
                 }
@@ -616,6 +633,7 @@ fun PreviewAndControlLayout(
                         value = uiState.zoomB,
                         onValueChange = { viewModel.setZoomB(it) },
                         valueRange = 1f..10f,
+                        steps = 17,
                         modifier = Modifier.height(24.dp)
                     )
                 }
