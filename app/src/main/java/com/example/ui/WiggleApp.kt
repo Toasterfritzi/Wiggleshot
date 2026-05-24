@@ -289,136 +289,158 @@ fun PreviewAndControlLayout(
     val context = LocalContext.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-    val previewViewA = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-        }
-    }
-    val previewViewB = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-        }
-    }
+    // For CameraX Fallbacks
+    val previewViewA = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER } }
+    val previewViewB = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER } }
 
     var cameraControlA by remember { mutableStateOf<CameraControl?>(null) }
     var cameraControlB by remember { mutableStateOf<CameraControl?>(null) }
     
-    // Hold references to active capturers
     var activeCaptureA by remember { mutableStateOf<ImageCapture?>(null) }
     var activeCaptureB by remember { mutableStateOf<ImageCapture?>(null) }
     
     var isCapturing by remember { mutableStateOf(false) }
     val mainExecutor = androidx.core.content.ContextCompat.getMainExecutor(context)
 
+    // For DualCameraManager on API >= 28
+    val textureViewA = remember { android.view.TextureView(context) }
+    val textureViewB = remember { android.view.TextureView(context) }
+    var dualManager by remember { mutableStateOf<com.example.util.DualCameraManager?>(null) }
+    var usingDualManager by remember { mutableStateOf(false) }
+
     // 1. Zoom adjustment binders
-    LaunchedEffect(uiState.zoomA, cameraControlA) {
+    LaunchedEffect(uiState.zoomA, uiState.zoomB, cameraControlA, dualManager) {
         cameraControlA?.setZoomRatio(uiState.zoomA)
+        dualManager?.setZoom(uiState.zoomA, uiState.zoomB)
     }
     LaunchedEffect(uiState.zoomB, cameraControlB) {
         cameraControlB?.setZoomRatio(uiState.zoomB)
     }
 
-    // 2. Camera structure lifecycle binder
-    LaunchedEffect(uiState.primaryLens, uiState.secondaryLens) {
-        val primary = uiState.primaryLens ?: return@LaunchedEffect
-        val secondary = uiState.secondaryLens ?: return@LaunchedEffect
+    DisposableEffect(uiState.primaryLens, uiState.secondaryLens) {
+        val primary = uiState.primaryLens
+        val secondary = uiState.secondaryLens
 
-        try {
-            val cameraProvider = ProcessCameraProvider.getInstance(context).await(context)
-            cameraProvider.unbindAll()
-
+        if (primary != null && secondary != null) {
             val logicalIdA = primary.parentLogicalId ?: primary.id
             val logicalIdB = secondary.parentLogicalId ?: secondary.id
-            
-            val builderA = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
-            if (primary.parentLogicalId != null) {
-                androidx.camera.camera2.interop.Camera2Interop.Extender(builderA)
-                    .setPhysicalCameraId(primary.id)
-            }
-            val capA = builderA.build()
-            
-            val builderB = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
-            if (secondary.parentLogicalId != null) {
-                androidx.camera.camera2.interop.Camera2Interop.Extender(builderB)
-                    .setPhysicalCameraId(secondary.id)
-            }
-            val capB = builderB.build()
 
-            activeCaptureA = capA
-            activeCaptureB = capB
-
-            if (logicalIdA == logicalIdB) {
-                // Shared Logical Camera Device Session!
-                val cameraSelector = findCameraSelector(cameraProvider, logicalIdA)
-
-                val previewBuilderA = Preview.Builder()
-                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
-                if (primary.parentLogicalId != null) {
-                    androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilderA)
-                        .setPhysicalCameraId(primary.id)
-                }
-                val previewA = previewBuilderA.build()
+            if (logicalIdA == logicalIdB && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                usingDualManager = true
                 
-                val previewBuilderB = Preview.Builder()
-                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
-                if (secondary.parentLogicalId != null) {
-                    androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilderB)
-                        .setPhysicalCameraId(secondary.id)
-                }
-                val previewB = previewBuilderB.build()
-
-                try {
-                    val camera = cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        previewA,
-                        previewB,
-                        capA,
-                        capB
+                val initDualManager = { stA: android.graphics.SurfaceTexture, stB: android.graphics.SurfaceTexture ->
+                    dualManager?.stop()
+                    val manager = com.example.util.DualCameraManager(
+                        context = context,
+                        logicalCameraId = logicalIdA,
+                        physicalIdA = primary.id,
+                        physicalIdB = secondary.id,
+                        surfaceA = android.view.Surface(stA),
+                        surfaceB = android.view.Surface(stB),
+                        onDualCapture = { bytesA, bytesB ->
+                            val bitmapA = android.graphics.BitmapFactory.decodeByteArray(bytesA, 0, bytesA.size)
+                            val bitmapB = android.graphics.BitmapFactory.decodeByteArray(bytesB, 0, bytesB.size)
+                            val matrix = android.graphics.Matrix()
+                            matrix.postRotate(90f)
+                            val aRot = android.graphics.Bitmap.createBitmap(bitmapA, 0, 0, bitmapA.width, bitmapA.height, matrix, true)
+                            val bRot = android.graphics.Bitmap.createBitmap(bitmapB, 0, 0, bitmapB.width, bitmapB.height, matrix, true)
+                            onCapture(aRot, bRot)
+                            isCapturing = false
+                        }
                     )
-
-                    previewA.setSurfaceProvider(previewViewA.surfaceProvider)
-                    previewB.setSurfaceProvider(previewViewB.surfaceProvider)
-                    cameraControlA = camera.cameraControl
-                    cameraControlB = camera.cameraControl // same session, maps control to both
-                } catch (e: Exception) {
-                     Log.e("CameraBinding", "Failed to bind 4 use cases in shared session.", e)
+                    dualManager = manager
+                    manager.start()
+                }
+                
+                // wait for surface textures to be available
+                textureViewA.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                        textureViewB.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st2: android.graphics.SurfaceTexture, width2: Int, height2: Int) {
+                                initDualManager(st, st2)
+                            }
+                            override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, width: Int, height: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture) = true
+                            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+                        }
+                        if (textureViewB.surfaceTexture != null) {
+                            initDualManager(st, textureViewB.surfaceTexture!!)
+                        }
+                    }
+                    override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, width: Int, height: Int) {}
+                    override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture) = true
+                    override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+                }
+                
+                // If they are already available (recomposition)
+                if (textureViewA.surfaceTexture != null && textureViewB.surfaceTexture != null) {
+                    initDualManager(textureViewA.surfaceTexture!!, textureViewB.surfaceTexture!!)
                 }
             } else {
-                // Separate Logical Sessions
-                val cameraSelectorA = findCameraSelector(cameraProvider, logicalIdA)
-                
-                val previewBuilderA = Preview.Builder()
-                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
-                val previewA = previewBuilderA.build()
+                usingDualManager = false
+                // CameraX Fallback for separate logical cameras
+                try {
+                    val cameraProvider = ProcessCameraProvider.getInstance(context).get()
+                    cameraProvider.unbindAll()
 
-                try {
-                    val cameraA = cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelectorA, previewA, capA)
-                    previewA.setSurfaceProvider(previewViewA.surfaceProvider)
-                    cameraControlA = cameraA.cameraControl
-                } catch (e: Exception) {
-                     Log.e("CameraBinding", "Failed A binding", e)
-                }
-                
-                try {
-                    val cameraSelectorB = findCameraSelector(cameraProvider, logicalIdB)
-                    val previewBuilderB = Preview.Builder()
+                    val builderA = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                         .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
-                    val previewB = previewBuilderB.build()
+                    if (primary.parentLogicalId != null && android.os.Build.VERSION.SDK_INT >= 28) {
+                        androidx.camera.camera2.interop.Camera2Interop.Extender(builderA).setPhysicalCameraId(primary.id)
+                    }
+                    val capA = builderA.build()
 
-                    val cameraB = cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelectorB, previewB, capB)
-                    previewB.setSurfaceProvider(previewViewB.surfaceProvider)
-                    cameraControlB = cameraB.cameraControl
+                    val builderB = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                    if (secondary.parentLogicalId != null && android.os.Build.VERSION.SDK_INT >= 28) {
+                        androidx.camera.camera2.interop.Camera2Interop.Extender(builderB).setPhysicalCameraId(secondary.id)
+                    }
+                    val capB = builderB.build()
+
+                    activeCaptureA = capA
+                    activeCaptureB = capB
+
+                    val cameraSelectorA = findCameraSelector(cameraProvider, logicalIdA)
+                    val previewBuilderA = Preview.Builder().setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3).apply {
+                        if (primary.parentLogicalId != null && android.os.Build.VERSION.SDK_INT >= 28) {
+                            androidx.camera.camera2.interop.Camera2Interop.Extender(this).setPhysicalCameraId(primary.id)
+                        }
+                    }.build()
+
+                    try {
+                        val cameraA = cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelectorA, previewBuilderA, capA)
+                        previewBuilderA.setSurfaceProvider(previewViewA.surfaceProvider)
+                        cameraControlA = cameraA.cameraControl
+                    } catch (e: Exception) { Log.e("CameraBinding", "Failed A", e) }
+
+                    if (logicalIdA != logicalIdB) {
+                        val cameraSelectorB = findCameraSelector(cameraProvider, logicalIdB)
+                        val previewBuilderB = Preview.Builder().setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3).apply {
+                            if (secondary.parentLogicalId != null && android.os.Build.VERSION.SDK_INT >= 28) {
+                                androidx.camera.camera2.interop.Camera2Interop.Extender(this).setPhysicalCameraId(secondary.id)
+                            }
+                        }.build()
+
+                        try {
+                            val cameraB = cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelectorB, previewBuilderB, capB)
+                            previewBuilderB.setSurfaceProvider(previewViewB.surfaceProvider)
+                            cameraControlB = cameraB.cameraControl
+                        } catch (e: Exception) { Log.e("CameraBinding", "Failed B", e) }
+                    } else {
+                        // We cannot bind B if it's the exact same logical camera and uses CameraX.
+                        // We'll just leave B empty if DualCameraManager didn't catch it
+                        Log.e("CameraBinding", "Cannot bind two previews to same logical camera in CameraX fallback.")
+                    }
+
                 } catch (e: Exception) {
-                    Log.e("CameraBinding", "Failed B binding", e)
+                    Log.e("CameraBinding", "Failed fallback binding", e)
                 }
             }
-        } catch (e: Exception) {
-             Log.e("CameraBinding", "Failed binding", e)
+        }
+        
+        onDispose {
+            dualManager?.stop()
+            dualManager = null
         }
     }
     
@@ -426,30 +448,32 @@ fun PreviewAndControlLayout(
         // Split screen viewfinder
         Column(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(
-                    factory = { previewViewA },
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (usingDualManager) {
+                    AndroidView(factory = { textureViewA }, modifier = Modifier.fillMaxSize())
+                } else {
+                    AndroidView(factory = { previewViewA }, modifier = Modifier.fillMaxSize())
+                }
                 Text(
-                    text = "A",
+                    text = "A (Zoom sync)",
                     color = Color(0xAAFFFFFF),
-                    fontSize = 48.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.Center)
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
                 )
             }
             Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FFCC)))
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(
-                    factory = { previewViewB },
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (usingDualManager) {
+                    AndroidView(factory = { textureViewB }, modifier = Modifier.fillMaxSize())
+                } else {
+                    AndroidView(factory = { previewViewB }, modifier = Modifier.fillMaxSize())
+                }
                 Text(
                     text = "B",
                     color = Color(0xAAFFFFFF),
-                    fontSize = 48.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.Center)
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
                 )
             }
         }
@@ -545,31 +569,56 @@ fun PreviewAndControlLayout(
             }
         }
         
-        // Zoom Controls Bottom Left
-        Box(
+        // Zoom Controls Bottom Left & Right
+        Row(
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth(0.5f)
-                .padding(start = 16.dp, bottom = 120.dp)
-                .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                .padding(8.dp)
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 120.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column {
-                Text(
-                    text = "ZOOM: ${String.format(java.util.Locale.US, "%.1fx", uiState.zoomA)}",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF00FFCC)
-                )
-                Slider(
-                    value = uiState.zoomA,
-                    onValueChange = { 
-                        viewModel.setZoomA(it)
-                        viewModel.setZoomB(it) 
-                    },
-                    valueRange = 1f..10f,
-                    modifier = Modifier.height(24.dp)
-                )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "ZOOM A: ${String.format(java.util.Locale.US, "%.1fx", uiState.zoomA)}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF00FFCC)
+                    )
+                    Slider(
+                        value = uiState.zoomA,
+                        onValueChange = { viewModel.setZoomA(it) },
+                        valueRange = 1f..10f,
+                        modifier = Modifier.height(24.dp)
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "ZOOM B: ${String.format(java.util.Locale.US, "%.1fx", uiState.zoomB)}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Slider(
+                        value = uiState.zoomB,
+                        onValueChange = { viewModel.setZoomB(it) },
+                        valueRange = 1f..10f,
+                        modifier = Modifier.height(24.dp)
+                    )
+                }
             }
         }
 
@@ -603,22 +652,25 @@ fun PreviewAndControlLayout(
                         .clickable {
                             isCapturing = true
                             
-                            val cA = activeCaptureA
-                            val cB = activeCaptureB
-                            
-                            if (cA != null && cB != null) {
-                                var bitmapA: Bitmap? = null
-                                var bitmapB: Bitmap? = null
+                            if (usingDualManager && dualManager != null) {
+                                dualManager?.takePicture()
+                            } else {
+                                val cA = activeCaptureA
+                                val cB = activeCaptureB
                                 
-                                val checkComplete = {
-                                    if (bitmapA != null && bitmapB != null) {
-                                        onCapture(bitmapA, bitmapB)
-                                        isCapturing = false
+                                if (cA != null && cB != null) {
+                                    var bitmapA: Bitmap? = null
+                                    var bitmapB: Bitmap? = null
+                                    
+                                    val checkComplete = {
+                                        if (bitmapA != null && bitmapB != null) {
+                                            onCapture(bitmapA, bitmapB)
+                                            isCapturing = false
+                                        }
                                     }
-                                }
 
-                                cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
-                                    override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
+                                    cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                                        override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
                                         val matrix = android.graphics.Matrix()
                                         matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
                                         
@@ -660,9 +712,10 @@ fun PreviewAndControlLayout(
                                         isCapturing = false
                                     }
                                 })
-                            } else {
-                                Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
-                                isCapturing = false
+                                } else {
+                                    Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
+                                    isCapturing = false
+                                }
                             }
                         },
                     contentAlignment = Alignment.Center
