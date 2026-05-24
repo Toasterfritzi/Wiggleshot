@@ -304,24 +304,10 @@ fun PreviewAndControlLayout(
 
     // For DualCameraManager on API >= 28
     val textureViewA = remember { 
-        android.view.TextureView(context).apply {
-            addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
-                val w = (right - left).toFloat()
-                val h = (bottom - top).toFloat()
-                val z = (view.getTag(8001) as? Float) ?: 1f
-                updateTextureViewTransform(view as android.view.TextureView, w, h, z)
-            }
-        }
+        com.example.ui.ZoomableTextureView(context)
     }
     val textureViewB = remember { 
-        android.view.TextureView(context).apply {
-            addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
-                val w = (right - left).toFloat()
-                val h = (bottom - top).toFloat()
-                val z = (view.getTag(8002) as? Float) ?: 1f
-                updateTextureViewTransform(view as android.view.TextureView, w, h, z)
-            }
-        }
+        com.example.ui.ZoomableTextureView(context)
     }
     var dualManager by remember { mutableStateOf<com.example.util.DualCameraManager?>(null) }
     var usingDualManager by remember { mutableStateOf(false) }
@@ -333,11 +319,23 @@ fun PreviewAndControlLayout(
         dualManager?.setZoom(uiState.zoomA, uiState.zoomB)
     }
 
-    DisposableEffect(uiState.primaryLens, uiState.secondaryLens) {
+    var isResumed by remember { mutableStateOf(false) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            isResumed = (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    DisposableEffect(uiState.primaryLens, uiState.secondaryLens, isResumed) {
         val primary = uiState.primaryLens
         val secondary = uiState.secondaryLens
 
-        if (primary != null && secondary != null) {
+        if (isResumed && primary != null && secondary != null) {
             val logicalIdA = primary.parentLogicalId ?: primary.id
             val logicalIdB = secondary.parentLogicalId ?: secondary.id
 
@@ -582,29 +580,15 @@ fun PreviewAndControlLayout(
         // Split screen viewfinder
         Column(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
-                if (usingDualManager) {
-                    AndroidView(
-                        factory = { 
-                            (textureViewA.parent as? android.view.ViewGroup)?.removeView(textureViewA)
-                            textureViewA
-                        }, 
-                        modifier = Modifier.fillMaxSize(),
-                        update = { view ->
-                            view.setTag(8001, uiState.zoomA)
-                            if (view.width > 0 && view.height > 0) {
-                                updateTextureViewTransform(view, view.width.toFloat(), view.height.toFloat(), uiState.zoomA)
-                            }
-                        }
-                    )
-                } else {
-                    AndroidView(
-                        factory = { 
-                            (previewViewA.parent as? android.view.ViewGroup)?.removeView(previewViewA)
-                            previewViewA 
-                        }, 
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                AndroidView(
+                    factory = { textureViewA }, 
+                    modifier = Modifier.fillMaxSize().alpha(if (usingDualManager) 1f else 0f),
+                    update = { view -> view.updateZoom(uiState.zoomA) }
+                )
+                AndroidView(
+                    factory = { previewViewA }, 
+                    modifier = Modifier.fillMaxSize().alpha(if (!usingDualManager) 1f else 0f)
+                )
                 Text(
                     text = "A (Zoom sync)",
                     color = Color(0xAAFFFFFF),
@@ -615,29 +599,15 @@ fun PreviewAndControlLayout(
             }
             Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FFCC)))
             Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
-                if (usingDualManager) {
-                    AndroidView(
-                        factory = { 
-                            (textureViewB.parent as? android.view.ViewGroup)?.removeView(textureViewB)
-                            textureViewB
-                        }, 
-                        modifier = Modifier.fillMaxSize(),
-                        update = { view ->
-                            view.setTag(8002, uiState.zoomB)
-                            if (view.width > 0 && view.height > 0) {
-                                updateTextureViewTransform(view, view.width.toFloat(), view.height.toFloat(), uiState.zoomB)
-                            }
-                        }
-                    )
-                } else {
-                    AndroidView(
-                        factory = { 
-                            (previewViewB.parent as? android.view.ViewGroup)?.removeView(previewViewB)
-                            previewViewB 
-                        }, 
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                AndroidView(
+                    factory = { textureViewB }, 
+                    modifier = Modifier.fillMaxSize().alpha(if (usingDualManager) 1f else 0f),
+                    update = { view -> view.updateZoom(uiState.zoomB) }
+                )
+                AndroidView(
+                    factory = { previewViewB }, 
+                    modifier = Modifier.fillMaxSize().alpha(if (!usingDualManager) 1f else 0f)
+                )
                 Text(
                     text = "B",
                     color = Color(0xAAFFFFFF),
@@ -862,6 +832,27 @@ fun updateTextureViewTransform(textureView: android.view.TextureView, viewWidth:
     matrix.postScale(zoom, zoom, centerX, centerY)
     
     textureView.setTransform(matrix)
+}
+
+class ZoomableTextureView(context: Context) : android.view.TextureView(context) {
+    var currentZoom: Float = 1f
+    var lastWidth: Float = 0f
+    var lastHeight: Float = 0f
+
+    init {
+        addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+            lastWidth = (right - left).toFloat()
+            lastHeight = (bottom - top).toFloat()
+            updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom)
+        }
+    }
+
+    fun updateZoom(newZoom: Float) {
+        currentZoom = newZoom
+        if (lastWidth > 0 && lastHeight > 0) {
+            updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom)
+        }
+    }
 }
 
 private fun findCameraSelector(cameraProvider: ProcessCameraProvider, cameraId: String): CameraSelector {
