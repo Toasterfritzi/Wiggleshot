@@ -303,8 +303,26 @@ fun PreviewAndControlLayout(
     val mainExecutor = androidx.core.content.ContextCompat.getMainExecutor(context)
 
     // For DualCameraManager on API >= 28
-    val textureViewA = remember { android.view.TextureView(context) }
-    val textureViewB = remember { android.view.TextureView(context) }
+    val textureViewA = remember { 
+        android.view.TextureView(context).apply {
+            addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
+                val w = (right - left).toFloat()
+                val h = (bottom - top).toFloat()
+                val z = (view.getTag(8001) as? Float) ?: 1f
+                updateTextureViewTransform(view as android.view.TextureView, w, h, z)
+            }
+        }
+    }
+    val textureViewB = remember { 
+        android.view.TextureView(context).apply {
+            addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
+                val w = (right - left).toFloat()
+                val h = (bottom - top).toFloat()
+                val z = (view.getTag(8002) as? Float) ?: 1f
+                updateTextureViewTransform(view as android.view.TextureView, w, h, z)
+            }
+        }
+    }
     var dualManager by remember { mutableStateOf<com.example.util.DualCameraManager?>(null) }
     var usingDualManager by remember { mutableStateOf(false) }
 
@@ -323,7 +341,7 @@ fun PreviewAndControlLayout(
             val logicalIdA = primary.parentLogicalId ?: primary.id
             val logicalIdB = secondary.parentLogicalId ?: secondary.id
 
-            if (logicalIdA == logicalIdB && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            if (logicalIdA == logicalIdB && primary.id != secondary.id && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                 usingDualManager = true
                 
                 val initDualManager = { stA: android.graphics.SurfaceTexture, stB: android.graphics.SurfaceTexture ->
@@ -567,14 +585,8 @@ fun PreviewAndControlLayout(
                 if (usingDualManager) {
                     AndroidView(
                         factory = { 
-                            textureViewA.apply {
-                                addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
-                                    val w = (right - left).toFloat()
-                                    val h = (bottom - top).toFloat()
-                                    val z = (view.getTag(8001) as? Float) ?: 1f
-                                    updateTextureViewTransform(view as android.view.TextureView, w, h, z)
-                                }
-                            }
+                            (textureViewA.parent as? android.view.ViewGroup)?.removeView(textureViewA)
+                            textureViewA
                         }, 
                         modifier = Modifier.fillMaxSize(),
                         update = { view ->
@@ -585,7 +597,13 @@ fun PreviewAndControlLayout(
                         }
                     )
                 } else {
-                    AndroidView(factory = { previewViewA }, modifier = Modifier.fillMaxSize())
+                    AndroidView(
+                        factory = { 
+                            (previewViewA.parent as? android.view.ViewGroup)?.removeView(previewViewA)
+                            previewViewA 
+                        }, 
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
                 Text(
                     text = "A (Zoom sync)",
@@ -600,14 +618,8 @@ fun PreviewAndControlLayout(
                 if (usingDualManager) {
                     AndroidView(
                         factory = { 
-                            textureViewB.apply {
-                                addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
-                                    val w = (right - left).toFloat()
-                                    val h = (bottom - top).toFloat()
-                                    val z = (view.getTag(8002) as? Float) ?: 1f
-                                    updateTextureViewTransform(view as android.view.TextureView, w, h, z)
-                                }
-                            }
+                            (textureViewB.parent as? android.view.ViewGroup)?.removeView(textureViewB)
+                            textureViewB
                         }, 
                         modifier = Modifier.fillMaxSize(),
                         update = { view ->
@@ -618,7 +630,13 @@ fun PreviewAndControlLayout(
                         }
                     )
                 } else {
-                    AndroidView(factory = { previewViewB }, modifier = Modifier.fillMaxSize())
+                    AndroidView(
+                        factory = { 
+                            (previewViewB.parent as? android.view.ViewGroup)?.removeView(previewViewB)
+                            previewViewB 
+                        }, 
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
                 Text(
                     text = "B",
