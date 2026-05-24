@@ -43,7 +43,8 @@ data class WiggleUiState(
     val zoomA: Float = 1.0f,
     val zoomB: Float = 1.0f,
     val concurrentPreviewSupported: Boolean = false,
-    val previewStateMessage: String = ""
+    val previewStateMessage: String = "",
+    val captureTrigger: Int = 0
 )
 
 class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
@@ -194,6 +195,10 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
 
     fun setZoomB(zoom: Float) {
         _uiState.value = _uiState.value.copy(zoomB = zoom)
+    }
+
+    fun triggerCapture() {
+        _uiState.value = _uiState.value.copy(captureTrigger = _uiState.value.captureTrigger + 1)
     }
 
     fun selectCapture(capture: WiggleCapture?) {

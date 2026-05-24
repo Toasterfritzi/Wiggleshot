@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import android.util.Size
 import android.view.Surface
 import androidx.annotation.RequiresApi
 
@@ -30,8 +31,11 @@ class DualCameraManager(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
 
-    private val imageReaderA = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
-    private val imageReaderB = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
+    private val sizeA: Size
+    private val sizeB: Size
+
+    private val imageReaderA: ImageReader
+    private val imageReaderB: ImageReader
 
     private val backgroundThread = HandlerThread("CameraBackground").apply { start() }
     private val backgroundHandler = Handler(backgroundThread.looper)
@@ -44,6 +48,14 @@ class DualCameraManager(
     private var zoomB: Float = 1.0f
 
     init {
+        sizeA = getLargest43Size(physicalIdA ?: logicalCameraId)
+        sizeB = getLargest43Size(physicalIdB ?: logicalCameraId)
+        
+        Log.d("DualCameraManager", "Initializing ImageReaders with 4:3 sizes: sizeA=${sizeA.width}x${sizeA.height}, sizeB=${sizeB.width}x${sizeB.height}")
+
+        imageReaderA = ImageReader.newInstance(sizeA.width, sizeA.height, ImageFormat.JPEG, 2)
+        imageReaderB = ImageReader.newInstance(sizeB.width, sizeB.height, ImageFormat.JPEG, 2)
+
         imageReaderA.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage()
             if (image != null) {
@@ -63,6 +75,29 @@ class DualCameraManager(
                 checkCaptureComplete()
             }
         }, backgroundHandler)
+    }
+
+    private fun getLargest43Size(cameraId: String): Size {
+        try {
+            val chars = cameraManager.getCameraCharacteristics(cameraId)
+            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val sizes = map?.getOutputSizes(ImageFormat.JPEG)
+            if (sizes != null && sizes.isNotEmpty()) {
+                val fourThirdsSizes = sizes.filter { size ->
+                    val aspect = size.width.toFloat() / size.height.toFloat()
+                    val diff = Math.abs(aspect - (4.0f / 3.0f))
+                    val diffInv = Math.abs(aspect - (3.0f / 4.0f))
+                    diff < 0.1 || diffInv < 0.1
+                }
+                if (fourThirdsSizes.isNotEmpty()) {
+                    return fourThirdsSizes.maxByOrNull { it.width * it.height }!!
+                }
+                return sizes.maxByOrNull { it.width * it.height }!!
+            }
+        } catch (e: Exception) {
+            Log.e("DualCameraManager", "Error finding largest 4:3 size for camera $cameraId", e)
+        }
+        return Size(4032, 3024)
     }
 
     private fun checkCaptureComplete() {

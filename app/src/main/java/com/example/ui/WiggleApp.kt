@@ -371,8 +371,10 @@ fun PreviewAndControlLayout(
                 // wait for surface textures to be available
                 textureViewA.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                        st.setDefaultBufferSize(1440, 1080)
                         textureViewB.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(st2: android.graphics.SurfaceTexture, width2: Int, height2: Int) {
+                                st2.setDefaultBufferSize(1440, 1080)
                                 initDualManager(st, st2)
                             }
                             override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, width: Int, height: Int) {}
@@ -380,6 +382,7 @@ fun PreviewAndControlLayout(
                             override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
                         }
                         if (textureViewB.surfaceTexture != null) {
+                            textureViewB.surfaceTexture!!.setDefaultBufferSize(1440, 1080)
                             initDualManager(st, textureViewB.surfaceTexture!!)
                         }
                     }
@@ -390,6 +393,8 @@ fun PreviewAndControlLayout(
                 
                 // If they are already available (recomposition)
                 if (textureViewA.surfaceTexture != null && textureViewB.surfaceTexture != null) {
+                    textureViewA.surfaceTexture!!.setDefaultBufferSize(1440, 1080)
+                    textureViewB.surfaceTexture!!.setDefaultBufferSize(1440, 1080)
                     initDualManager(textureViewA.surfaceTexture!!, textureViewB.surfaceTexture!!)
                 }
             } else {
@@ -460,10 +465,112 @@ fun PreviewAndControlLayout(
         }
     }
     
+    val executeCapture = remember(usingDualManager, dualManager, activeCaptureA, activeCaptureB) {
+        {
+            if (!isCapturing && !uiState.isCapturing) {
+                isCapturing = true
+                if (usingDualManager && dualManager != null) {
+                    dualManager?.takePicture()
+                } else {
+                    val cA = activeCaptureA
+                    val cB = activeCaptureB
+                    
+                    if (cA != null && cB != null) {
+                        var bitmapA: Bitmap? = null
+                        var bitmapB: Bitmap? = null
+                        
+                        val checkComplete = {
+                            if (bitmapA != null && bitmapB != null) {
+                                onCapture(bitmapA, bitmapB)
+                                isCapturing = false
+                            }
+                        }
+
+                        cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                            override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
+                            val matrix = android.graphics.Matrix()
+                            matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+                            
+                            val buffer = image.planes[0].buffer
+                            val bytes = ByteArray(buffer.remaining())
+                            buffer.get(bytes)
+                            val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            
+                            val crop = image.cropRect
+                            val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
+                            val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
+                            
+                            // Account for potential rounding errors
+                            val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
+                            val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
+                            val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
+                            val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
+                            
+                            matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
+                            
+                            bitmapA = android.graphics.Bitmap.createBitmap(
+                                tempBitmap, cx, cy, cw, ch, matrix, true
+                            )
+                            image.close()
+                            checkComplete()
+                        }
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.e("Wiggle", "Capture A failed", exception)
+                            isCapturing = false
+                        }
+                    })
+                    
+                    cB.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
+                            val matrix = android.graphics.Matrix()
+                            matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+                            
+                            val buffer = image.planes[0].buffer
+                            val bytes = ByteArray(buffer.remaining())
+                            buffer.get(bytes)
+                            val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            
+                            val crop = image.cropRect
+                            val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
+                            val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
+                            
+                            val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
+                            val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
+                            val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
+                            val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
+                            
+                            matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
+                            
+                            bitmapB = android.graphics.Bitmap.createBitmap(
+                                tempBitmap, cx, cy, cw, ch, matrix, true
+                            )
+                            image.close()
+                            checkComplete()
+                        }
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.e("Wiggle", "Capture B failed", exception)
+                            isCapturing = false
+                        }
+                    })
+                    } else {
+                        Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
+                        isCapturing = false
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(uiState.captureTrigger) {
+        if (uiState.captureTrigger > 0) {
+            executeCapture()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Split screen viewfinder
         Column(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
                 if (usingDualManager) {
                     AndroidView(factory = { textureViewA }, modifier = Modifier.fillMaxSize())
                 } else {
@@ -478,7 +585,7 @@ fun PreviewAndControlLayout(
                 )
             }
             Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FFCC)))
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
                 if (usingDualManager) {
                     AndroidView(factory = { textureViewB }, modifier = Modifier.fillMaxSize())
                 } else {
@@ -667,98 +774,7 @@ fun PreviewAndControlLayout(
                         .size(72.dp)
                         .padding(6.dp)
                         .border(3.dp, Color.White, CircleShape)
-                        .clickable {
-                            isCapturing = true
-                            
-                            if (usingDualManager && dualManager != null) {
-                                dualManager?.takePicture()
-                            } else {
-                                val cA = activeCaptureA
-                                val cB = activeCaptureB
-                                
-                                if (cA != null && cB != null) {
-                                    var bitmapA: Bitmap? = null
-                                    var bitmapB: Bitmap? = null
-                                    
-                                    val checkComplete = {
-                                        if (bitmapA != null && bitmapB != null) {
-                                            onCapture(bitmapA, bitmapB)
-                                            isCapturing = false
-                                        }
-                                    }
-
-                                    cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
-                                        override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                                        val matrix = android.graphics.Matrix()
-                                        matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
-                                        
-                                        val buffer = image.planes[0].buffer
-                                        val bytes = ByteArray(buffer.remaining())
-                                        buffer.get(bytes)
-                                        val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                        
-                                        val crop = image.cropRect
-                                        val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
-                                        val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
-                                        
-                                        // Account for potential rounding errors
-                                        val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
-                                        val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
-                                        val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
-                                        val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
-                                        
-                                        matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
-                                        
-                                        bitmapA = android.graphics.Bitmap.createBitmap(
-                                            tempBitmap, cx, cy, cw, ch, matrix, true
-                                        )
-                                        image.close()
-                                        checkComplete()
-                                    }
-                                    override fun onError(exception: ImageCaptureException) {
-                                        Log.e("Wiggle", "Capture A failed", exception)
-                                        isCapturing = false
-                                    }
-                                })
-                                
-                                cB.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
-                                    override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                                        val matrix = android.graphics.Matrix()
-                                        matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
-                                        
-                                        val buffer = image.planes[0].buffer
-                                        val bytes = ByteArray(buffer.remaining())
-                                        buffer.get(bytes)
-                                        val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                        
-                                        val crop = image.cropRect
-                                        val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
-                                        val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
-                                        
-                                        val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
-                                        val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
-                                        val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
-                                        val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
-                                        
-                                        matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
-                                        
-                                        bitmapB = android.graphics.Bitmap.createBitmap(
-                                            tempBitmap, cx, cy, cw, ch, matrix, true
-                                        )
-                                        image.close()
-                                        checkComplete()
-                                    }
-                                    override fun onError(exception: ImageCaptureException) {
-                                        Log.e("Wiggle", "Capture B failed", exception)
-                                        isCapturing = false
-                                    }
-                                })
-                                } else {
-                                    Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
-                                    isCapturing = false
-                                }
-                            }
-                        },
+                        .clickable { executeCapture() },
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
