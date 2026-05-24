@@ -185,16 +185,6 @@ fun WiggleApp(viewModel: WiggleViewModel) {
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // 2. Alignment matching setup guidelines card
-                        if (uiState.selectedCapture == null) {
-                            CalibrationGuideCard(
-                                uiState = uiState,
-                                onLockToggle = { viewModel.setLockedAlignEnabled(it) }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
                         // 3. Captures history / Database list
                         Text(
                             text = "GALLERY & CREATIONS",
@@ -305,7 +295,7 @@ fun PreviewAndControlLayout(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                // Viewfinder A: Primary / Wide-angle Normal
+                // Viewfinder A: Primary
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -326,74 +316,66 @@ fun PreviewAndControlLayout(
                             .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            text = "LENS A: Normal (1x)",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                        Column {
+                            var expanded by remember { mutableStateOf(false) }
+                            Text(
+                                text = "LENS A: ${uiState.primaryLens?.name ?: "Unknown"}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.clickable { expanded = true }
+                            )
+                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                uiState.availableLenses.forEach { lens ->
+                                    DropdownMenuItem(
+                                        text = { Text(lens.name) },
+                                        onClick = {
+                                            viewModel.setPrimaryLens(lens)
+                                            expanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
-                            .padding(12.dp)
+                            .fillMaxWidth()
+                            .padding(8.dp)
                             .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            text = "ZOOM: ${String.format("%.1fx", uiState.zoomA)}",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF00FFCC)
-                        )
+                        Column {
+                            Text(
+                                text = "ZOOM A: ${String.format("%.1fx", uiState.zoomA)}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00FFCC)
+                            )
+                            Slider(
+                                value = uiState.zoomA,
+                                onValueChange = { viewModel.setZoomA(it) },
+                                valueRange = 1f..10f,
+                                modifier = Modifier.height(24.dp)
+                            )
+                        }
                     }
                 }
 
-                // Viewfinder B: Secondary / Ultra-wide 0.5x
+                // Viewfinder B: Secondary
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .border(1.dp, Color(0xFF232A38))
                 ) {
-                    if (uiState.simulatedParallaxFallback) {
-                        // If platform restricts opening multiple camera streams concurrently,
-                        // we show a beautiful aligned helper view indicating the exact calibration zoom
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFF11141E)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    imageVector = Icons.Default.Link,
-                                    contentDescription = "Lock",
-                                    tint = Color(0x7700FFCC),
-                                    modifier = Modifier.size(40.dp)
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    "LENS B (Matched)",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Text(
-                                    "Simulating 2.0x zoom",
-                                    fontSize = 10.sp,
-                                    color = Color(0xFF8A94A6)
-                                )
-                            }
-                        }
-                    } else {
-                        CameraXViewfinder(
-                            lensId = uiState.secondaryLens?.id ?: "1",
-                            zoomRatio = uiState.zoomB,
-                            onFrame = { liveBitmapB = it }
-                        )
-                    }
+                    CameraXViewfinder(
+                        lensId = uiState.secondaryLens?.id ?: "1",
+                        zoomRatio = uiState.zoomB,
+                        onFrame = { liveBitmapB = it }
+                    )
 
                     // Labelling overlay
                     Box(
@@ -403,27 +385,51 @@ fun PreviewAndControlLayout(
                             .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            text = "LENS B: Wide (0.5x)",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                        Column {
+                            var expanded by remember { mutableStateOf(false) }
+                            Text(
+                                text = "LENS B: ${uiState.secondaryLens?.name ?: "Unknown"}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.clickable { expanded = true }
+                            )
+                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                uiState.availableLenses.forEach { lens ->
+                                    DropdownMenuItem(
+                                        text = { Text(lens.name) },
+                                        onClick = {
+                                            viewModel.setSecondaryLens(lens)
+                                            expanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(12.dp)
+                            .fillMaxWidth()
+                            .padding(8.dp)
                             .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            text = "ZOOM: ${String.format("%.1fx", uiState.zoomB)}",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF00FFCC)
-                        )
+                        Column {
+                            Text(
+                                text = "ZOOM B: ${String.format("%.1fx", uiState.zoomB)}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00FFCC)
+                            )
+                            Slider(
+                                value = uiState.zoomB,
+                                onValueChange = { viewModel.setZoomB(it) },
+                                valueRange = 1f..10f,
+                                modifier = Modifier.height(24.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -472,60 +478,7 @@ fun PreviewAndControlLayout(
     }
 }
 
-@Composable
-fun CalibrationGuideCard(
-    uiState: WiggleUiState,
-    onLockToggle: (Boolean) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF161920)),
-        border = BoxDefaults.borderStrokeWithSecondary()
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Camera,
-                        contentDescription = "Calibration",
-                        tint = Color(0xFF00FFCC),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "STEREO DEPTH CALIBRATION",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
 
-                Switch(
-                    checked = uiState.lockedAlignEnabled,
-                    onCheckedChange = onLockToggle,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color(0xFF0F1115),
-                        checkedTrackColor = Color(0xFF00FFCC)
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "When Locked, the wider 0.5x lens is automatically zoomed to exactly 2.0x, aligning its angular field of view with the normal 1x lens so they capture a perfectly matched parallax pair.",
-                fontSize = 11.sp,
-                color = Color(0xFF8A94A6),
-                lineHeight = 16.sp
-            )
-        }
-    }
-}
 
 @Composable
 fun WigglePlayerLayout(
@@ -535,39 +488,23 @@ fun WigglePlayerLayout(
 ) {
     val context = LocalContext.current
     var currentFrameIndex by remember { mutableStateOf(0) }
-    var interactiveOffsetX by remember { mutableStateOf(capture.alignmentOffsetX) }
-    var interactiveOffsetY by remember { mutableStateOf(capture.alignmentOffsetY) }
-    var currentSpeed by remember { mutableStateOf(capture.speedFps) }
-
+    
     // Read files
     val bitmapA = remember(capture.imageAPath) { WiggleProcessor.loadBitmap(capture.imageAPath) }
     val bitmapB = remember(capture.imageBPath) { WiggleProcessor.loadBitmap(capture.imageBPath) }
-    val bitmapBlend = remember(capture.blendedImagePath, interactiveOffsetX, interactiveOffsetY) {
-        if (bitmapA != null && bitmapB != null) {
-            WiggleProcessor.blendBitmaps(
-                bitmapA,
-                bitmapB,
-                blendFactor = 0.5f,
-                offsetX = interactiveOffsetX,
-                offsetY = interactiveOffsetY
-            )
-        } else null
-    }
 
-    // Playback loop controller (A -> Blend -> B -> Blend -> A)
-    LaunchedEffect(currentSpeed) {
+    // Playback loop controller (A -> B)
+    LaunchedEffect(Unit) {
         while (true) {
-            val delayMs = (1000f / currentSpeed).toLong()
+            val delayMs = 250L // 4 fps simple toggle
             delay(delayMs)
-            currentFrameIndex = (currentFrameIndex + 1) % 4
+            currentFrameIndex = (currentFrameIndex + 1) % 2
         }
     }
 
     val activeDisplayBitmap = when (currentFrameIndex) {
         0 -> bitmapA
-        1 -> bitmapBlend
-        2 -> bitmapB
-        else -> bitmapBlend
+        else -> bitmapB
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -585,13 +522,6 @@ fun WigglePlayerLayout(
                     contentDescription = "Holographic Parallax Feed",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Text(
-                    "FAILED RENDERING STEREO PAIR",
-                    color = Color.Red,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
                 )
             }
 
@@ -623,9 +553,7 @@ fun WigglePlayerLayout(
             ) {
                 val frameLabel = when (currentFrameIndex) {
                     0 -> "CAM A"
-                    1 -> "GENERATED MID"
-                    2 -> "CAM B"
-                    else -> "GENERATED MID"
+                    else -> "CAM B"
                 }
                 Text(
                     text = "$frameLabel",
@@ -667,49 +595,31 @@ fun WigglePlayerLayout(
                 )
             }
 
-            // 1. Horizontal calibration alignment offset (depth point shift)
             Text(
-                text = "Stereo Convergence Offset (X): ${String.format("%.0f px", interactiveOffsetX)}",
-                fontSize = 11.sp,
-                color = Color(0xFF8A94A6)
+                "Mache mehr daraus mit KI!",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
-            Slider(
-                value = interactiveOffsetX,
-                onValueChange = {
-                    interactiveOffsetX = it
-                },
-                onValueChangeFinished = {
-                    viewModel.updateAlignmentInteractive(context, capture, interactiveOffsetX, interactiveOffsetY)
-                },
-                valueRange = -80f..80f,
-                colors = SliderDefaults.colors(
-                    activeTrackColor = Color(0xFF00FFCC),
-                    thumbColor = Color(0xFF00FFCC)
-                )
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 2. Playback Speed frequency (Fps)
             Text(
-                text = "Wiggle Speed: ${String.format("%.1f FPS", currentSpeed)}",
-                fontSize = 11.sp,
-                color = Color(0xFF8A94A6)
+                capture.prompt,
+                fontSize = 12.sp,
+                color = Color.LightGray,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
-            Slider(
-                value = currentSpeed,
-                onValueChange = {
-                    currentSpeed = it
+            Button(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("KI Prompt", capture.prompt)
+                    clipboard.setPrimaryClip(clip)
+                    android.widget.Toast.makeText(context, "Prompt kopiert!", android.widget.Toast.LENGTH_SHORT).show()
                 },
-                onValueChangeFinished = {
-                    viewModel.updateSelectedCaptureSpeed(capture, currentSpeed)
-                },
-                valueRange = 2f..20f,
-                colors = SliderDefaults.colors(
-                    activeTrackColor = Color(0xFF00FFCC),
-                    thumbColor = Color(0xFF00FFCC)
-                )
-            )
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FFCC)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Prompt für Gemini (KI) kopieren", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
@@ -769,7 +679,7 @@ fun HistoryItemCard(
     ) {
         // Thumbnail loading
         AsyncImage(
-            model = item.blendedImagePath,
+            model = item.imageAPath,
             contentDescription = "Wiggle capture",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -838,7 +748,22 @@ fun CameraXViewfinder(
         }
     }
 
+    val preview = remember { Preview.Builder().build() }
+    val imageCapture = remember { ImageCapture.Builder().build() }
+
     var cameraControlState by remember { mutableStateOf<CameraControl?>(null) }
+
+    // Unbind only this viewfinder's use cases when of disposal or lens alteration
+    DisposableEffect(lensId) {
+        onDispose {
+            try {
+                val cameraProvider = ProcessCameraProvider.getInstance(context).get()
+                cameraProvider.unbind(preview, imageCapture)
+            } catch (e: Exception) {
+                Log.e("CameraXViewfinder", "Error during granular viewfinder unbind", e)
+            }
+        }
+    }
 
     // 1. Separate dynamic zoom tracking state (Smooth adjustment, absolutely no unbind camera calls!)
     LaunchedEffect(zoomRatio, cameraControlState) {
@@ -870,10 +795,12 @@ fun CameraXViewfinder(
                 }
             }
 
-            val preview = Preview.Builder().build()
-            val imageCapture = ImageCapture.Builder().build()
+            try {
+                cameraProvider.unbind(preview, imageCapture)
+            } catch (e: Exception) {
+                // Ignore if not bound
+            }
 
-            cameraProvider.unbindAll()
             val camera = cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 selectedSelector,

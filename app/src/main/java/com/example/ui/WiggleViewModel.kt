@@ -40,10 +40,8 @@ data class WiggleUiState(
     val primaryLens: CameraLensDetails? = null,
     val secondaryLens: CameraLensDetails? = null,
     val zoomA: Float = 1.0f,
-    val zoomB: Float = 2.0f, // 2x matching zoom for ultra-wide lens
-    val lockedAlignEnabled: Boolean = true,
+    val zoomB: Float = 1.0f,
     val concurrentPreviewSupported: Boolean = false,
-    val simulatedParallaxFallback: Boolean = false,
     val previewStateMessage: String = ""
 )
 
@@ -120,8 +118,6 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
                     primaryLens = primary,
                     secondaryLens = secondary,
                     concurrentPreviewSupported = concurrentCapable,
-                    // If running on an emulator, typically concurrent is false, which triggers our beautiful fallback 3D morph engine
-                    simulatedParallaxFallback = lenses.size < 2 || !concurrentCapable,
                     previewStateMessage = if (concurrentCapable) "Dual Cameras Active" else "Single Viewfinder (Smart Fallback Capture)"
                 )
             } catch (e: Exception) {
@@ -146,83 +142,8 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
         _uiState.value = _uiState.value.copy(zoomB = zoom)
     }
 
-    fun setLockedAlignEnabled(enabled: Boolean) {
-        _uiState.value = _uiState.value.copy(lockedAlignEnabled = enabled)
-        if (enabled) {
-            // Force normal to 1x and ultra-wide to 2x (classic stereo match alignment range)
-            _uiState.value = _uiState.value.copy(zoomA = 1.0f, zoomB = 2.0f)
-        }
-    }
-
     fun selectCapture(capture: WiggleCapture?) {
         _uiState.value = _uiState.value.copy(selectedCapture = capture)
-    }
-
-    fun updateSelectedCaptureSpeed(capture: WiggleCapture, fps: Float) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = capture.copy(speedFps = fps)
-            repository.insertCapture(updated)
-            if (_uiState.value.selectedCapture?.id == capture.id) {
-                _uiState.value = _uiState.value.copy(selectedCapture = updated)
-            }
-        }
-    }
-
-    fun updateSelectedCaptureAlignment(capture: WiggleCapture, offsetX: Float, offsetY: Float) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val pathA = capture.imageAPath
-            val pathB = capture.imageBPath
-
-            val bA = WiggleProcessor.loadBitmap(pathA)
-            val bB = WiggleProcessor.loadBitmap(pathB)
-
-            if (bA != null && bB != null) {
-                // Re-blend with the new updated optical alignment translations
-                val blended = WiggleProcessor.blendBitmaps(bA, bB, blendFactor = 0.5f, offsetX = offsetX, offsetY = offsetY)
-                
-                // Overwrite the existing blended file
-                val fileName = File(capture.blendedImagePath).name
-                val savedBlendedPath = WiggleProcessor.saveToInternalFiles(
-                    context = null ?: return@launch, // Fallback scope but we pass app context via internal handlers or write locally
-                    bitmap = blended,
-                    fileName = fileName
-                ) ?: capture.blendedImagePath
-
-                val updated = capture.copy(
-                    alignmentOffsetX = offsetX,
-                    alignmentOffsetY = offsetY,
-                    blendedImagePath = savedBlendedPath
-                )
-                repository.insertCapture(updated)
-                if (_uiState.value.selectedCapture?.id == capture.id) {
-                    _uiState.value = _uiState.value.copy(selectedCapture = updated)
-                }
-            }
-        }
-    }
-
-    // Context-sensitive update for slider shifts
-    fun updateAlignmentInteractive(context: Context, capture: WiggleCapture, offsetX: Float, offsetY: Float) {
-        viewModelScope.launch(Dispatchers.Default) {
-            val bA = WiggleProcessor.loadBitmap(capture.imageAPath)
-            val bB = WiggleProcessor.loadBitmap(capture.imageBPath)
-            if (bA != null && bB != null) {
-                val blended = WiggleProcessor.blendBitmaps(bA, bB, blendFactor = 0.5f, offsetX = offsetX, offsetY = offsetY)
-                val fileName = "blended_${capture.timestamp}.jpg"
-                val path = WiggleProcessor.saveToInternalFiles(context, blended, fileName)
-                if (path != null) {
-                    val updated = capture.copy(
-                        alignmentOffsetX = offsetX,
-                        alignmentOffsetY = offsetY,
-                        blendedImagePath = path
-                    )
-                    repository.insertCapture(updated)
-                    if (_uiState.value.selectedCapture?.id == capture.id) {
-                        _uiState.value = _uiState.value.copy(selectedCapture = updated)
-                    }
-                }
-            }
-        }
     }
 
     fun deleteCapture(context: Context, capture: WiggleCapture) {
@@ -231,7 +152,6 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
                 // Delete internal files safely
                 File(capture.imageAPath).delete()
                 File(capture.imageBPath).delete()
-                File(capture.blendedImagePath).delete()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed deleting internal raw cache files", e)
             }
@@ -244,53 +164,36 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
 
     /**
      * Executes the Dual Capture capture process.
-     * On devices without simultaneous hardware access (or emulators),
-     * it gracefully generates a stellar 3D parallax capture using our robust fallback alignment engine.
      */
     fun performDualCapture(context: Context, bitmapA: Bitmap?, bitmapB: Bitmap?) {
         viewModelScope.launch(Dispatchers.Default) {
             _uiState.value = _uiState.value.copy(isCapturing = true)
             try {
-                var finalA = bitmapA
-                var finalB = bitmapB
-
-                // 1. Fallback / Generator Mode if camera feeds are null (e.g., emulator environment or physical locks)
-                if (finalA == null || finalB == null) {
-                    Log.d(TAG, "Null bitmaps supplied. Initiating dynamic generator fallback engine...")
-                    finalA = generateSyntheticScene(0f)
-                    finalB = generateSyntheticScene(15f) // physical displacement angle
+                if (bitmapA == null || bitmapB == null) {
+                    Log.e(TAG, "Null bitmaps supplied. Cannot perform capture.")
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(isCapturing = false)
+                    }
+                    return@launch
                 }
-
-                val bA = finalA ?: return@launch
-                val bB = finalB ?: return@launch
 
                 val timestamp = System.currentTimeMillis()
 
-                // Align, crop and perform high-quality alpha blending
-                val (alignedA, alignedB) = WiggleProcessor.alignBitmaps(bA, bB)
-                val blended = WiggleProcessor.blendBitmaps(alignedA, alignedB, blendFactor = 0.5f, offsetX = 0f, offsetY = 0f)
-
                 // Save to local cached directory for rapid app rendering in LazyColumns / players
-                val pathA = WiggleProcessor.saveToInternalFiles(context, alignedA, "camA_$timestamp.jpg") ?: ""
-                val pathB = WiggleProcessor.saveToInternalFiles(context, alignedB, "camB_$timestamp.jpg") ?: ""
-                val pathBlend = WiggleProcessor.saveToInternalFiles(context, blended, "blend_$timestamp.jpg") ?: ""
+                val pathA = WiggleProcessor.saveToInternalFiles(context, bitmapA, "camA_$timestamp.jpg") ?: ""
+                val pathB = WiggleProcessor.saveToInternalFiles(context, bitmapB, "camB_$timestamp.jpg") ?: ""
 
-                // STRICT MANDATE: Save BOTH images at the very same time to the user's Gallery
-                val publicUriA = WiggleProcessor.saveToGallery(context, alignedA, "Wiggle_${timestamp}_Left")
-                val publicUriB = WiggleProcessor.saveToGallery(context, alignedB, "Wiggle_${timestamp}_Right")
-                val publicUriBlend = WiggleProcessor.saveToGallery(context, blended, "Wiggle_${timestamp}_StereoMid")
+                // Save BOTH images at the very same time to the user's Gallery
+                val publicUriA = WiggleProcessor.saveToGallery(context, bitmapA, "Wiggle_${timestamp}_Left")
+                val publicUriB = WiggleProcessor.saveToGallery(context, bitmapB, "Wiggle_${timestamp}_Right")
 
-                Log.d(TAG, "Exported both raw shots & intermediate bridge frame to media store: A: $publicUriA, B: $publicUriB")
+                Log.d(TAG, "Exported both raw shots to media store: A: $publicUriA, B: $publicUriB")
 
                 // Insert database record
                 val newCapture = WiggleCapture(
                     imageAPath = pathA,
                     imageBPath = pathB,
-                    blendedImagePath = pathBlend,
-                    timestamp = timestamp,
-                    alignmentOffsetX = 0f,
-                    alignmentOffsetY = 0f,
-                    speedFps = 8f
+                    timestamp = timestamp
                 )
 
                 val insertId = repository.insertCapture(newCapture)
@@ -309,77 +212,6 @@ class WiggleViewModel(private val repository: WiggleRepository) : ViewModel() {
                 }
             }
         }
-    }
-
-    /**
-     * Generates beautiful synthetic 3D structural perspective spheres and grids
-     * to render a stunning stereoscopic parallax scene in emulator screens.
-     */
-    private fun generateSyntheticScene(focalOffset: Float): Bitmap {
-        val w = 1080
-        val h = 1350
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
-        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-
-        // Draw modern grid background landscape (Dark luxury theme)
-        canvas.drawColor(0xFF0D0F12.toInt())
-        
-        // Draw grid lines perspective projection
-        p.color = 0xFF1E2633.toInt()
-        p.strokeWidth = 3f
-        
-        val gridCount = 20
-        for (i in 0..gridCount) {
-            val ratio = i.toFloat() / gridCount
-            // horizontal line
-            canvas.drawLine(0f, h * 0.4f + ratio * h * 0.6f, w.toFloat(), h * 0.4f + ratio * h * 0.6f, p)
-            // vertical line projecting to center horizon
-            val xStart = w * 0.5f + (ratio - 0.5f) * w * 0.2f
-            val xEnd = (ratio - 0.5f) * w * 3f + w * 0.5f
-            canvas.drawLine(xStart, h * 0.4f, xEnd - (focalOffset * 0.4f), h.toFloat(), p)
-        }
-
-        // Draw glowing accent horizon sun
-        val gradPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.FILL
-        }
-        gradPaint.color = 0x3300FFCC.toInt() // Neon teal glow
-        canvas.drawCircle(w * 0.5f - focalOffset * 0.1f, h * 0.4f, 250f, gradPaint)
-
-        // Draw standard horizon boundary
-        p.color = 0xFF00FFCC.toInt()
-        p.strokeWidth = 5f
-        canvas.drawLine(0f, h * 0.4f, w.toFloat(), h * 0.4f, p)
-
-        // Draw foreground 3D sphere with camera offset parallax shift
-        val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0x88000000.toInt()
-        }
-        // Shadow shifts coordinates
-        canvas.drawOval(
-            w * 0.5f - 180f - (focalOffset * 1.5f),
-            h * 0.7f + 90f,
-            w * 0.5f + 180f - (focalOffset * 1.5f),
-            h * 0.7f + 150f,
-            shadowPaint
-        )
-
-        // Draw neon 3D subject sphere
-        val spherePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFFF3366.toInt() // Vibrant neon pink
-        }
-        canvas.drawCircle(w * 0.5f - (focalOffset * 1.5f), h * 0.7f, 150f, spherePaint)
-
-        // Draw a secondary small sphere placed in the deep plane (parallax shifts less)
-        spherePaint.color = 0xFF3399FF.toInt() // Neon blue
-        canvas.drawCircle(w * 0.35f - (focalOffset * 0.5f), h * 0.5f, 60f, spherePaint)
-
-        // Sphere highlights
-        spherePaint.color = 0xAAFFFFFF.toInt()
-        canvas.drawCircle(w * 0.5f - (focalOffset * 1.5f) - 40f, h * 0.7f - 40f, 30f, spherePaint)
-
-        return bmp
     }
 }
 

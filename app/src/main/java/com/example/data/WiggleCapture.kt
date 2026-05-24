@@ -8,9 +8,6 @@ data class WiggleCapture(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val imageAPath: String,
     val imageBPath: String,
-    val blendedImagePath: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val alignmentOffsetX: Float = 0f,
-    val alignmentOffsetY: Float = 0f,
-    val speedFps: Float = 8f
+    val prompt: String = "Hier sind zwei Bilder aus leicht unterschiedlichen Winkeln. Bitte erstelle ein genaues Zwischenbild, das den exakten Übergang zwischen beiden darstellt, um einen stereoskopischen 3D-Wiggle-Effekt zu erzeugen."
 )

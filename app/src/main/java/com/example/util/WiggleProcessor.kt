@@ -18,69 +18,7 @@ import java.io.OutputStream
 object WiggleProcessor {
     private const val TAG = "WiggleProcessor"
 
-    /**
-     * Crop and resize two bitmaps to be exactly the same size, centering both.
-     */
-    fun alignBitmaps(bitmapA: Bitmap, bitmapB: Bitmap): Pair<Bitmap, Bitmap> {
-        val targetWidth = minOf(bitmapA.width, bitmapB.width)
-        val targetHeight = minOf(bitmapA.height, bitmapB.height)
 
-        Log.d(TAG, "Aligning bitmaps to match sizing: ${targetWidth}x${targetHeight}")
-
-        val alignedA = centerCrop(bitmapA, targetWidth, targetHeight)
-        val alignedB = centerCrop(bitmapB, targetWidth, targetHeight)
-
-        return Pair(alignedA, alignedB)
-    }
-
-    private fun centerCrop(src: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
-        if (src.width == targetWidth && src.height == targetHeight) return src
-
-        val xOffset = (src.width - targetWidth) / 2
-        val yOffset = (src.height - targetHeight) / 2
-
-        val cropped = Bitmap.createBitmap(src, xOffset, yOffset, targetWidth, targetHeight)
-        if (cropped != src && !src.isRecycled) {
-            // Do not immediately recycle src as it might be used elsewhere, 
-            // but log if we generated a new instance.
-        }
-        return cropped
-    }
-
-    /**
-     * Blends two bitmaps.
-     * blendFactor: 0.0f = entirely A, 1.0f = entirely B. Since we want an in-between frame, we use 0.5f.
-     * offsetX/offsetY: can be used to shift the second bitmap relative to the first to calibrate parallax alignment.
-     */
-    fun blendBitmaps(
-        bitmapA: Bitmap,
-        bitmapB: Bitmap,
-        blendFactor: Float = 0.5f,
-        offsetX: Float = 0f,
-        offsetY: Float = 0f
-    ): Bitmap {
-        val (finalA, finalB) = alignBitmaps(bitmapA, bitmapB)
-
-        val width = finalA.width
-        val height = finalA.height
-
-        val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(result)
-        val paint = Paint().apply {
-            isAntiAlias = true
-            isFilterBitmap = true
-        }
-
-        // 1. Draw original base background (A) with appropriate opacity
-        paint.alpha = ((1f - blendFactor) * 255).toInt()
-        canvas.drawBitmap(finalA, 0f, 0f, paint)
-
-        // 2. Blend/overlay camera B with appropriate opacity and alignment offsets
-        paint.alpha = (blendFactor * 255).toInt()
-        canvas.drawBitmap(finalB, offsetX, offsetY, paint)
-
-        return result
-    }
 
     /**
      * Save a bitmap to internal app directories for stable local retrieval.
