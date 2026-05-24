@@ -47,7 +47,22 @@ class DualCameraManager(
     private var zoomA: Float = 1.0f
     private var zoomB: Float = 1.0f
 
+    private var minZoomRatio: Float = 1.0f
+
     init {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val chars = cameraManager.getCameraCharacteristics(logicalCameraId)
+                val zoomRange = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (zoomRange != null) {
+                    minZoomRatio = zoomRange.lower
+                    Log.d("DualCameraManager", "Min zoom ratio supported: \$minZoomRatio")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("DualCameraManager", "Failed to get zoom range", e)
+        }
+
         sizeA = getLargest43Size(physicalIdA ?: logicalCameraId)
         sizeB = getLargest43Size(physicalIdB ?: logicalCameraId)
         
@@ -175,6 +190,9 @@ class DualCameraManager(
             builder.addTarget(surfaceA)
             builder.addTarget(surfaceB)
             
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, minZoomRatio)
+            }
             // Zoom is handled via TextureView scaling and Bitmap cropping instead of CONTROL_ZOOM_RATIO
             
             captureSession?.setRepeatingRequest(builder.build(), null, backgroundHandler)
@@ -186,7 +204,8 @@ class DualCameraManager(
     fun setZoom(zA: Float, zB: Float) {
         zoomA = zA
         zoomB = zB
-        startPreview() // re-apply
+        // We do not re-apply startPreview here anymore because zoom is only visual/post-processed.
+        // The camera streams full FOV constantly.
     }
 
     fun takePicture() {
@@ -194,6 +213,10 @@ class DualCameraManager(
             val builder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE) ?: return
             builder.addTarget(imageReaderA.surface)
             builder.addTarget(imageReaderB.surface)
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, minZoomRatio)
+            }
             
             // Basic quality settings
             builder.set(CaptureRequest.JPEG_QUALITY, 95.toByte())

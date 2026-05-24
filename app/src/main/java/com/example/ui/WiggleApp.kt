@@ -313,13 +313,6 @@ fun PreviewAndControlLayout(
         cameraControlA?.setZoomRatio(uiState.zoomA)
         cameraControlB?.setZoomRatio(uiState.zoomB)
         dualManager?.setZoom(uiState.zoomA, uiState.zoomB)
-        
-        if (usingDualManager) {
-            textureViewA.scaleX = uiState.zoomA
-            textureViewA.scaleY = uiState.zoomA
-            textureViewB.scaleX = uiState.zoomB
-            textureViewB.scaleY = uiState.zoomB
-        }
     }
 
     DisposableEffect(uiState.primaryLens, uiState.secondaryLens) {
@@ -572,7 +565,25 @@ fun PreviewAndControlLayout(
         Column(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
                 if (usingDualManager) {
-                    AndroidView(factory = { textureViewA }, modifier = Modifier.fillMaxSize())
+                    AndroidView(
+                        factory = { 
+                            textureViewA.apply {
+                                addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
+                                    val w = (right - left).toFloat()
+                                    val h = (bottom - top).toFloat()
+                                    val z = (view.getTag(8001) as? Float) ?: 1f
+                                    updateTextureViewTransform(view as android.view.TextureView, w, h, z)
+                                }
+                            }
+                        }, 
+                        modifier = Modifier.fillMaxSize(),
+                        update = { view ->
+                            view.setTag(8001, uiState.zoomA)
+                            if (view.width > 0 && view.height > 0) {
+                                updateTextureViewTransform(view, view.width.toFloat(), view.height.toFloat(), uiState.zoomA)
+                            }
+                        }
+                    )
                 } else {
                     AndroidView(factory = { previewViewA }, modifier = Modifier.fillMaxSize())
                 }
@@ -587,7 +598,25 @@ fun PreviewAndControlLayout(
             Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FFCC)))
             Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
                 if (usingDualManager) {
-                    AndroidView(factory = { textureViewB }, modifier = Modifier.fillMaxSize())
+                    AndroidView(
+                        factory = { 
+                            textureViewB.apply {
+                                addOnLayoutChangeListener { view, left, top, right, bottom, _, _, _, _ ->
+                                    val w = (right - left).toFloat()
+                                    val h = (bottom - top).toFloat()
+                                    val z = (view.getTag(8002) as? Float) ?: 1f
+                                    updateTextureViewTransform(view as android.view.TextureView, w, h, z)
+                                }
+                            }
+                        }, 
+                        modifier = Modifier.fillMaxSize(),
+                        update = { view ->
+                            view.setTag(8002, uiState.zoomB)
+                            if (view.width > 0 && view.height > 0) {
+                                updateTextureViewTransform(view, view.width.toFloat(), view.height.toFloat(), uiState.zoomB)
+                            }
+                        }
+                    )
                 } else {
                     AndroidView(factory = { previewViewB }, modifier = Modifier.fillMaxSize())
                 }
@@ -788,6 +817,34 @@ fun PreviewAndControlLayout(
     }
 }
 
+
+fun updateTextureViewTransform(textureView: android.view.TextureView, viewWidth: Float, viewHeight: Float, zoom: Float) {
+    val matrix = android.graphics.Matrix()
+    if (viewWidth == 0f || viewHeight == 0f) return
+
+    val centerX = viewWidth / 2f
+    val centerY = viewHeight / 2f
+
+    // We assume the camera buffer is generally a 4:3 landscape stream like 1440x1080 or 4032x3024
+    // We'll calculate purely on 4:3 landscape ratio to keep it aspect-perfect
+    val bufferWidth = 1440f
+    val bufferHeight = 1080f
+
+    // 1. Un-stretch to actual stream ratio
+    matrix.postScale(bufferWidth / viewWidth, bufferHeight / viewHeight, centerX, centerY)
+    
+    // 2. Rotate it so it's portrait
+    matrix.postRotate(90f, centerX, centerY)
+    
+    // 3. Center crop to fill the container view without distortion
+    val scale = maxOf(viewWidth / bufferHeight, viewHeight / bufferWidth)
+    matrix.postScale(scale, scale, centerX, centerY)
+    
+    // 4. Apply manual zoom crop
+    matrix.postScale(zoom, zoom, centerX, centerY)
+    
+    textureView.setTransform(matrix)
+}
 
 private fun findCameraSelector(cameraProvider: ProcessCameraProvider, cameraId: String): CameraSelector {
     for (info in cameraProvider.availableCameraInfos) {
