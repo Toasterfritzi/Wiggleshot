@@ -1,0 +1,6 @@
+{
+  "name": "Wiggle Camera",
+  "description": "Capture perfectly aligned dual-lens wide and ultra-wide stereoscopic 3D wiggle photos with a dynamic frame-interpolation playback loop.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
