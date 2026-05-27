@@ -742,7 +742,7 @@ fun PreviewAndControlLayout(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "ZOOM (HAUPTLINSE): ${String.format(java.util.Locale.US, "%.1fx", pZoom)}",
+                            text = "ZOOM (HAUPTLINSE): ${String.format(java.util.Locale.US, "%.2fx", pZoom)}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF00FFCC)
@@ -773,7 +773,7 @@ fun PreviewAndControlLayout(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "ZOOM (SEKUNDÄRLINSE ${index + 1}): ${String.format(java.util.Locale.US, "%.1fx", sZoom)}",
+                            text = "ZOOM (SEKUNDÄRLINSE ${index + 1}): ${String.format(java.util.Locale.US, "%.2fx", sZoom)}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
