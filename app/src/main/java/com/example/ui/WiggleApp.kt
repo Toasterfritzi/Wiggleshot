@@ -29,8 +29,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -121,34 +123,26 @@ fun WiggleApp(viewModel: WiggleViewModel) {
                     )
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF1E2430),
-                    modifier = Modifier.clickable {
-                        Toast.makeText(context, "Dual Camera Calibration Locked", Toast.LENGTH_SHORT).show()
-                    }
+                IconButton(
+                    onClick = { viewModel.toggleSettings() },
+                    modifier = Modifier
+                        .background(Color(0xFF1E2430), RoundedCornerShape(12.dp))
+                        .size(44.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .background(Color(0xFF00FFCC), CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "STEREO ACTIVE",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Einstellungen",
+                        tint = Color.White
+                    )
                 }
             }
 
-            if (cameraPermissionState.status.isGranted) {
+            if (uiState.showSettings) {
+                SettingsScreen(
+                    viewModel = viewModel,
+                    onBack = { viewModel.toggleSettings() }
+                )
+            } else if (cameraPermissionState.status.isGranted) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -489,96 +483,149 @@ fun PreviewAndControlLayout(
         }
     }
     
-    val executeCapture = remember(usingDualManager, dualManager, activeCaptureA, activeCaptureB) {
+    val coroutineScope = rememberCoroutineScope()
+    
+    val executeCapture = remember(usingDualManager, dualManager, activeCaptureA, activeCaptureB, uiState, previewViewA, previewViewB, textureViewA, textureViewB) {
         {
             if (!isCapturing && !uiState.isCapturing) {
                 isCapturing = true
-                if (usingDualManager && dualManager != null) {
-                    dualManager?.takePicture()
-                } else {
-                    val cA = activeCaptureA
-                    val cB = activeCaptureB
-                    
-                    if (cA != null && cB != null) {
-                        var bitmapA: Bitmap? = null
-                        var bitmapB: Bitmap? = null
-                        
-                        val checkComplete = {
-                            if (bitmapA != null && bitmapB != null) {
-                                onCapture(bitmapA, bitmapB)
-                                isCapturing = false
-                            }
-                        }
-
-                        cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
-                            override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                            val matrix = android.graphics.Matrix()
-                            matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
-                            
-                            val buffer = image.planes[0].buffer
-                            val bytes = ByteArray(buffer.remaining())
-                            buffer.get(bytes)
-                            val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            
-                            val crop = image.cropRect
-                            val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
-                            val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
-                            
-                            // Account for potential rounding errors
-                            val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
-                            val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
-                            val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
-                            val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
-                            
-                            matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
-                            
-                            bitmapA = android.graphics.Bitmap.createBitmap(
-                                tempBitmap, cx, cy, cw, ch, matrix, true
-                            )
-                            image.close()
-                            checkComplete()
-                        }
-                        override fun onError(exception: ImageCaptureException) {
-                            Log.e("Wiggle", "Capture A failed", exception)
-                            isCapturing = false
-                        }
-                    })
-                    
-                    cB.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
-                        override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                            val matrix = android.graphics.Matrix()
-                            matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
-                            
-                            val buffer = image.planes[0].buffer
-                            val bytes = ByteArray(buffer.remaining())
-                            buffer.get(bytes)
-                            val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            
-                            val crop = image.cropRect
-                            val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
-                            val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
-                            
-                            val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
-                            val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
-                            val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
-                            val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
-                            
-                            matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
-                            
-                            bitmapB = android.graphics.Bitmap.createBitmap(
-                                tempBitmap, cx, cy, cw, ch, matrix, true
-                            )
-                            image.close()
-                            checkComplete()
-                        }
-                        override fun onError(exception: ImageCaptureException) {
-                            Log.e("Wiggle", "Capture B failed", exception)
-                            isCapturing = false
-                        }
-                    })
+                
+                if (uiState.lensCount == 2) {
+                    if (usingDualManager && dualManager != null) {
+                        dualManager?.takePicture()
                     } else {
-                        Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
-                        isCapturing = false
+                        val cA = activeCaptureA
+                        val cB = activeCaptureB
+                        
+                        if (cA != null && cB != null) {
+                            var bitmapA: Bitmap? = null
+                            var bitmapB: Bitmap? = null
+                            
+                            val checkComplete = {
+                                if (bitmapA != null && bitmapB != null) {
+                                    onCapture(bitmapA, bitmapB)
+                                    isCapturing = false
+                                }
+                            }
+
+                            cA.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                                override fun onCaptureSuccess(image: ImageProxy) {
+                                    val matrix = android.graphics.Matrix()
+                                    matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+                                    
+                                    val buffer = image.planes[0].buffer
+                                    val bytes = ByteArray(buffer.remaining())
+                                    buffer.get(bytes)
+                                    val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    
+                                    val crop = image.cropRect
+                                    val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
+                                    val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
+                                    
+                                    val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
+                                    val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
+                                    val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
+                                    val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
+                                    
+                                    matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
+                                    
+                                    bitmapA = android.graphics.Bitmap.createBitmap(
+                                        tempBitmap, cx, cy, cw, ch, matrix, true
+                                    )
+                                    image.close()
+                                    checkComplete()
+                                }
+                                override fun onError(exception: ImageCaptureException) {
+                                    Log.e("Wiggle", "Capture A failed", exception)
+                                    isCapturing = false
+                                }
+                            })
+                            
+                            cB.takePicture(mainExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                                override fun onCaptureSuccess(image: ImageProxy) {
+                                    val matrix = android.graphics.Matrix()
+                                    matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+                                    
+                                    val buffer = image.planes[0].buffer
+                                    val bytes = ByteArray(buffer.remaining())
+                                    buffer.get(bytes)
+                                    val tempBitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    
+                                    val crop = image.cropRect
+                                    val scaleX = tempBitmap.width.toFloat() / image.width.toFloat()
+                                    val scaleY = tempBitmap.height.toFloat() / image.height.toFloat()
+                                    
+                                    val cw = (crop.width() * scaleX).toInt().coerceAtMost(tempBitmap.width)
+                                    val ch = (crop.height() * scaleY).toInt().coerceAtMost(tempBitmap.height)
+                                    val cx = (crop.left * scaleX).toInt().coerceAtMost(tempBitmap.width - cw)
+                                    val cy = (crop.top * scaleY).toInt().coerceAtMost(tempBitmap.height - ch)
+                                    
+                                    matrix.postScale(tempBitmap.width.toFloat() / cw, tempBitmap.height.toFloat() / ch)
+                                    
+                                    bitmapB = android.graphics.Bitmap.createBitmap(
+                                        tempBitmap, cx, cy, cw, ch, matrix, true
+                                    )
+                                    image.close()
+                                    checkComplete()
+                                }
+                                override fun onError(exception: ImageCaptureException) {
+                                    Log.e("Wiggle", "Capture B failed", exception)
+                                    isCapturing = false
+                                }
+                            })
+                        } else {
+                            Toast.makeText(context, "Kameras nicht bereit", Toast.LENGTH_SHORT).show()
+                            isCapturing = false
+                        }
+                    }
+                } else {
+                    // Sequential Multi-Camera Capture (3 or 4 Lenses)
+                    coroutineScope.launch {
+                        try {
+                            val capturedBitmaps = mutableListOf<Bitmap>()
+                            
+                            // 1. Grab Primary Lens Frame
+                            val bmpPrimary = if (usingDualManager) {
+                                textureViewA.getBitmap(textureViewA.width, textureViewA.height) ?: textureViewA.bitmap
+                            } else {
+                                previewViewA.bitmap
+                            }
+                            if (bmpPrimary != null) {
+                                capturedBitmaps.add(bmpPrimary)
+                            }
+                            
+                            // 2. Grab Secondary Lenses Sequentially
+                            val originalSelection = uiState.secondaryLenses
+                            
+                            for (lens in originalSelection) {
+                                viewModel.setSecondaryLens(lens)
+                                kotlinx.coroutines.delay(300) // Settle delay
+                                
+                                val bmpSecondary = if (usingDualManager) {
+                                    textureViewB.getBitmap(textureViewB.width, textureViewB.height) ?: textureViewB.bitmap
+                                } else {
+                                    previewViewB.bitmap
+                                }
+                                if (bmpSecondary != null) {
+                                    capturedBitmaps.add(bmpSecondary)
+                                }
+                            }
+                            
+                            // Restore original selection
+                            if (originalSelection.isNotEmpty()) {
+                                viewModel.setSecondaryLens(originalSelection.first())
+                            }
+                            
+                            if (capturedBitmaps.isNotEmpty()) {
+                                viewModel.performMultiCapture(context, capturedBitmaps)
+                            } else {
+                                Toast.makeText(context, "Aufnahme fehlgeschlagen", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("WiggleApp", "Sequential capture failed", e)
+                        } finally {
+                            isCapturing = false
+                        }
                     }
                 }
             }
@@ -608,7 +655,7 @@ fun PreviewAndControlLayout(
         // Hidden Secondary Viewfinder (Camera B) - Must exist for SurfaceTexture to be active & available
         Box(
             modifier = Modifier
-                .size(1.dp)
+                .size(640.dp, 480.dp)
                 .alpha(0.01f)
         ) {
             AndroidView(
@@ -622,71 +669,29 @@ fun PreviewAndControlLayout(
             )
         }
         
-        // Settings Overlay / Lens Selection Top Left
+        // Camera Mode Indicator Pill Top Left
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(12.dp)
                 .background(Color(0xD90D0F12), RoundedCornerShape(12.dp))
                 .border(1.dp, Color(0xFF232A38), RoundedCornerShape(12.dp))
-                .padding(12.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Column {
-                Text(
-                    text = "LENS CONFIGURATION",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Black,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(bottom = 8.dp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(if (uiState.lensCount == 2) Color(0xFF00FFCC) else Color(0xFFFFCC00), CircleShape)
                 )
-                
-                var expandedA by remember { mutableStateOf(false) }
-                Column(modifier = Modifier.clickable { expandedA = true }.fillMaxWidth(0.6f).padding(vertical = 4.dp)) {
-                    Text(text = "LENS A", fontSize = 10.sp, color = Color(0xFF00FFCC), fontWeight = FontWeight.Bold)
-                    Text(
-                        text = uiState.primaryLens?.name ?: "Unknown",
-                        fontSize = 12.sp,
-                        color = Color.White,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-                DropdownMenu(expanded = expandedA, onDismissRequest = { expandedA = false }) {
-                    uiState.availableLenses.forEach { lens ->
-                        DropdownMenuItem(
-                            text = { Text(lens.name, fontSize = 12.sp) },
-                            onClick = {
-                                viewModel.setPrimaryLens(lens)
-                                expandedA = false
-                            }
-                        )
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(4.dp))
-                Box(modifier = Modifier.fillMaxWidth(0.6f).height(1.dp).background(Color(0xFF232A38)))
-                Spacer(modifier = Modifier.height(4.dp))
-                
-                var expandedB by remember { mutableStateOf(false) }
-                Column(modifier = Modifier.clickable { expandedB = true }.fillMaxWidth(0.6f).padding(vertical = 4.dp)) {
-                    Text(text = "LENS B", fontSize = 10.sp, color = Color(0xFF00FFCC), fontWeight = FontWeight.Bold)
-                    Text(
-                        text = uiState.secondaryLens?.name ?: "Unknown",
-                        fontSize = 12.sp,
-                        color = Color.White,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-                DropdownMenu(expanded = expandedB, onDismissRequest = { expandedB = false }) {
-                    uiState.availableLenses.forEach { lens ->
-                        DropdownMenuItem(
-                            text = { Text(lens.name, fontSize = 12.sp) },
-                            onClick = {
-                                viewModel.setSecondaryLens(lens)
-                                expandedB = false
-                            }
-                        )
-                    }
-                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (uiState.lensCount == 2) "SIMULTAN (2 Linsen)" else "SEQUENTIELL (${uiState.lensCount} Linsen)",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White,
+                    letterSpacing = 0.5.sp
+                )
             }
         }
 
@@ -706,91 +711,191 @@ fun PreviewAndControlLayout(
                     color = Color(0xFF00FFCC)
                 )
                 Text(
-                    text = "Hauptlinse live",
+                    text = "Kamera live",
                     fontSize = 8.sp,
                     color = Color.LightGray
                 )
             }
         }
         
-        // Zoom Controls Bottom Left & Right
-        Row(
+        // Dynamic Zoom Controls Bottom
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 120.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(bottom = 120.dp)
+                .background(Color(0xCC0D0F12), RoundedCornerShape(16.dp))
+                .border(1.dp, Color(0xFF232A38), RoundedCornerShape(16.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                    .padding(8.dp)
-            ) {
+            // Primary Lens Slider
+            val pLens = uiState.primaryLens
+            if (pLens != null) {
+                val pLimits = uiState.zoomLimitsMap[pLens.id] ?: Pair(1f, 3f)
+                val pZoom = (uiState.zoomMap[pLens.id] ?: 1.0f).coerceIn(pLimits.first, pLimits.second)
                 Column {
-                    Text(
-                        text = "ZOOM A: ${String.format(java.util.Locale.US, "%.1fx", uiState.zoomA)}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF00FFCC)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "ZOOM (HAUPTLINSE): ${String.format(java.util.Locale.US, "%.1fx", pZoom)}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF00FFCC)
+                        )
+                        Text(
+                            text = pLens.name,
+                            fontSize = 8.sp,
+                            color = Color.Gray
+                        )
+                    }
                     Slider(
-                        value = uiState.zoomA,
-                        onValueChange = { viewModel.setZoomA(it) },
-                        valueRange = 1f..5f,
-                        steps = 39,
+                        value = pZoom,
+                        onValueChange = { viewModel.setZoomForLens(pLens.id, it) },
+                        valueRange = pLimits.first..pLimits.second,
                         modifier = Modifier.height(24.dp)
                     )
                 }
             }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
-                    .padding(8.dp)
-            ) {
+
+            // Slider for each active secondary lens
+            uiState.secondaryLenses.forEachIndexed { index, sLens ->
+                val sLimits = uiState.zoomLimitsMap[sLens.id] ?: Pair(1f, 3f)
+                val sZoom = (uiState.zoomMap[sLens.id] ?: 1.0f).coerceIn(sLimits.first, sLimits.second)
                 Column {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "ZOOM B: ${String.format(java.util.Locale.US, "%.2fx", uiState.zoomB)}",
+                            text = "ZOOM (SEKUNDÄRLINSE ${index + 1}): ${String.format(java.util.Locale.US, "%.1fx", sZoom)}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    if (uiState.isAutoZoomApplied) Color(0xFF00FFCC) else Color(0xFF232A38),
-                                    RoundedCornerShape(4.dp)
-                                )
-                                .clickable {
-                                    val w = textureViewA.width
-                                    val h = textureViewA.height
-                                    val bmpA = if (w > 0 && h > 0) textureViewA.getBitmap(w, h) else textureViewA.bitmap
-                                    val bmpB = if (w > 0 && h > 0) textureViewB.getBitmap(w, h) else textureViewB.bitmap
-                                    viewModel.autoCalibrateFOV(bmpA, bmpB)
-                                }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "AUTO",
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Black,
-                                color = if (uiState.isAutoZoomApplied) Color.Black else Color.White
-                            )
-                        }
+                        Text(
+                            text = sLens.name,
+                            fontSize = 8.sp,
+                            color = Color.Gray
+                        )
                     }
                     Slider(
-                        value = uiState.zoomB,
-                        onValueChange = { viewModel.setZoomB(it) },
-                        valueRange = 1f..3f,
+                        value = sZoom,
+                        onValueChange = { viewModel.setZoomForLens(sLens.id, it) },
+                        valueRange = sLimits.first..sLimits.second,
                         modifier = Modifier.height(24.dp)
                     )
+                }
+            }
+
+            // Auto-Zoom Calibration Button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (uiState.isCalibrating) Color(0xFF2C3545)
+                            else if (uiState.isAutoZoomApplied) Color(0xFF00FFCC)
+                            else Color(0xFF1E2430)
+                        )
+                        .border(
+                            1.dp,
+                            if (uiState.isCalibrating) Color(0xFF3B485E)
+                            else if (uiState.isAutoZoomApplied) Color(0xFF00FFCC)
+                            else Color(0xFF232A38),
+                            RoundedCornerShape(10.dp)
+                        )
+                        .clickable(enabled = !uiState.isCalibrating) {
+                            coroutineScope.launch {
+                                viewModel.setCalibrating(true)
+                                try {
+                                    val results = mutableMapOf<String, MutableList<Float>>()
+                                    val originalSecondary = uiState.secondaryLens
+                                    val originalZoomB = uiState.zoomB
+                                    
+                                    // Loop through all secondary lenses
+                                    for (lens in uiState.secondaryLenses) {
+                                        if (uiState.secondaryLens?.id != lens.id) {
+                                            viewModel.setSecondaryLens(lens)
+                                            delay(2000) // Give more time for the new camera session to start
+                                        }
+                                        
+                                        val limits = uiState.zoomLimitsMap[lens.id] ?: Pair(1.0f, 3.0f)
+                                        val minZoom = limits.first.coerceAtLeast(1.0f)
+                                        val maxZoom = limits.second
+                                        
+                                        // Run ZNCC visual matching 5 times and collect results
+                                        for (i in 0 until 5) {
+                                            // Take fresh frames inside the loop to get different real-time images
+                                            val bmpPrimary = if (usingDualManager) {
+                                                textureViewA.getBitmap(640, 480)
+                                            } else {
+                                                previewViewA.bitmap
+                                            }
+                                            
+                                            val bmpSecondary = if (usingDualManager) {
+                                                textureViewB.getBitmap(640, 480)
+                                            } else {
+                                                previewViewB.bitmap
+                                            }
+                                            
+                                            if (bmpPrimary != null && bmpSecondary != null && bmpSecondary.width > 50 && bmpSecondary.height > 50) {
+                                                val bestZoom = viewModel.calculateVisualZoomMatch(bmpPrimary, bmpSecondary, minZoom, maxZoom)
+                                                results.getOrPut(lens.id) { mutableListOf() }.add(bestZoom)
+                                            } else {
+                                                android.util.Log.e("WiggleApp", "Cannot calibrate iteration $i for lens ${lens.id}: bmpPrimary=$bmpPrimary, bmpSecondary=$bmpSecondary")
+                                            }
+                                            
+                                            if (i < 4) {
+                                                delay(150) // Wait a brief period to get a fresh frame
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Restore original secondary lens and zoom if we switched it
+                                    if (originalSecondary != null && uiState.secondaryLens?.id != originalSecondary.id) {
+                                        viewModel.setSecondaryLens(originalSecondary)
+                                        viewModel.setZoomB(originalZoomB)
+                                        delay(500)
+                                    }
+                                    
+                                    viewModel.applyCalibrationResults(results)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("WiggleApp", "Error during ML calibration", e)
+                                    viewModel.setCalibrating(false)
+                                }
+                            }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (uiState.isCalibrating) {
+                            CircularProgressIndicator(
+                                color = Color(0xFF00FFCC),
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.5.dp
+                            )
+                        }
+                        Text(
+                            text = if (uiState.isCalibrating) "KALIBRIERE..." else if (uiState.isAutoZoomApplied) "✓ AUTO" else "⚡ AUTO KALIBRIERUNG",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            color = if (uiState.isCalibrating) Color(0xFF8A94A6) else if (uiState.isAutoZoomApplied) Color.Black else Color(0xFF00FFCC),
+                            letterSpacing = 0.5.sp
+                        )
+                    }
                 }
             }
         }
@@ -921,31 +1026,56 @@ fun WigglePlayerLayout(
     onCloseReview: () -> Unit
 ) {
     val context = LocalContext.current
-    var currentFrameIndex by remember { mutableStateOf(0) }
+    val coroutineScope = rememberCoroutineScope()
     
-    // Read files
-    val bitmapA = remember(capture.imageAPath) { WiggleProcessor.loadBitmap(capture.imageAPath) }
-    val bitmapB = remember(capture.imageBPath) { WiggleProcessor.loadBitmap(capture.imageBPath) }
+    // Read multi-frame image paths
+    val imagePaths = remember(capture.imagePaths) { capture.getImagePathList() }
+    val loadedBitmaps = remember(imagePaths) {
+        imagePaths.mapNotNull { WiggleProcessor.loadBitmap(it) }
+    }
 
-    // Playback loop controller (A -> B)
-    LaunchedEffect(Unit) {
+    var isPingPong by remember { mutableStateOf(true) }
+    var delayTimeMs by remember { mutableStateOf(250f) } // Default 250ms (4 fps)
+    
+    var currentFrameIndex by remember { mutableStateOf(0) }
+    var direction by remember { mutableStateOf(1) } // 1 for forward, -1 for backward
+
+    // Multi-frame looping playback logic
+    LaunchedEffect(loadedBitmaps, isPingPong, delayTimeMs) {
+        if (loadedBitmaps.isEmpty()) return@LaunchedEffect
+        
         while (true) {
-            val delayMs = 250L // 4 fps simple toggle
-            delay(delayMs)
-            currentFrameIndex = (currentFrameIndex + 1) % 2
+            delay(delayTimeMs.toLong())
+            
+            if (isPingPong) {
+                if (loadedBitmaps.size <= 1) {
+                    currentFrameIndex = 0
+                } else {
+                    val nextIndex = currentFrameIndex + direction
+                    if (nextIndex >= loadedBitmaps.size) {
+                        direction = -1
+                        currentFrameIndex = (loadedBitmaps.size - 2).coerceAtLeast(0)
+                    } else if (nextIndex < 0) {
+                        direction = 1
+                        currentFrameIndex = 1.coerceAtMost(loadedBitmaps.size - 1)
+                    } else {
+                        currentFrameIndex = nextIndex
+                    }
+                }
+            } else {
+                currentFrameIndex = (currentFrameIndex + 1) % loadedBitmaps.size
+            }
         }
     }
 
-    val activeDisplayBitmap = when (currentFrameIndex) {
-        0 -> bitmapA
-        else -> bitmapB
-    }
+    val activeDisplayBitmap = loadedBitmaps.getOrNull(currentFrameIndex)
+    var isExporting by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Player screen area
         Box(
             modifier = Modifier
-                .weight(1f)
+                .weight(1.2f)
                 .fillMaxWidth()
                 .background(Color.Black),
             contentAlignment = Alignment.Center
@@ -985,12 +1115,8 @@ fun WigglePlayerLayout(
                     .background(Color(0x990D0F12), RoundedCornerShape(8.dp))
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                val frameLabel = when (currentFrameIndex) {
-                    0 -> "CAM A"
-                    else -> "CAM B"
-                }
                 Text(
-                    text = "$frameLabel",
+                    text = "LINSE ${currentFrameIndex + 1}/${loadedBitmaps.size}",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF00FFCC)
@@ -1004,55 +1130,156 @@ fun WigglePlayerLayout(
                 .fillMaxWidth()
                 .background(Color(0xFF161920))
                 .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            // Title descriptor
+            Text(
+                "3D WIGGLE CONTROLLER",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            // Loop Mode Switcher
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "3D WIGGLE CONTROLLER",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    letterSpacing = 1.sp
-                )
-                
-                Text(
-                    "SAVED TO GALLERY",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF00FFCC)
-                )
+                Text("Loop-Modus", fontSize = 13.sp, color = Color.LightGray)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { isPingPong = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isPingPong) Color(0xFF00FFCC) else Color(0xFF232A38)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(32.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "Ping-Pong",
+                            fontSize = 11.sp,
+                            color = if (isPingPong) Color.Black else Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Button(
+                        onClick = { isPingPong = false },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (!isPingPong) Color(0xFF00FFCC) else Color(0xFF232A38)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(32.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "Loop",
+                            fontSize = 11.sp,
+                            color = if (!isPingPong) Color.Black else Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
-            Text(
-                "Mache mehr daraus mit KI!",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            Text(
-                capture.prompt,
-                fontSize = 12.sp,
-                color = Color.LightGray,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            Button(
-                onClick = {
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    val clip = android.content.ClipData.newPlainText("KI Prompt", capture.prompt)
-                    clipboard.setPrimaryClip(clip)
-                    android.widget.Toast.makeText(context, "Prompt kopiert!", android.widget.Toast.LENGTH_SHORT).show()
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FFCC)),
-                modifier = Modifier.fillMaxWidth()
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Speed Control
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Prompt für Gemini (KI) kopieren", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Geschwindigkeit", fontSize = 13.sp, color = Color.LightGray)
+                Text("${delayTimeMs.toInt()} ms", fontSize = 13.sp, color = Color(0xFF00FFCC), fontWeight = FontWeight.Bold)
+            }
+            Slider(
+                value = delayTimeMs,
+                onValueChange = { delayTimeMs = it },
+                valueRange = 50f..800f,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Export Actions
+            if (isExporting) {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color(0xFF00FFCC), modifier = Modifier.size(28.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("Exportiere GIF...", fontSize = 11.sp, color = Color(0xFF00FFCC))
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            isExporting = true
+                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                                try {
+                                    val exportFrames = mutableListOf<Bitmap>()
+                                    if (isPingPong && loadedBitmaps.size > 2) {
+                                        exportFrames.addAll(loadedBitmaps)
+                                        for (i in (loadedBitmaps.size - 2) downTo 1) {
+                                            exportFrames.add(loadedBitmaps[i])
+                                        }
+                                    } else {
+                                        exportFrames.addAll(loadedBitmaps)
+                                    }
+                                    
+                                    val gifBytes = com.example.util.GifEncoder.encode(exportFrames, delayTimeMs.toInt())
+                                    val savedUri = WiggleProcessor.saveGifToGallery(context, gifBytes, "Wiggle_${System.currentTimeMillis()}")
+                                    
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        if (savedUri != null) {
+                                            Toast.makeText(context, "GIF in Galerie gespeichert!", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            Toast.makeText(context, "Export fehlgeschlagen", Toast.LENGTH_SHORT).show()
+                                        }
+                                        isExporting = false
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("WiggleApp", "Failed exporting GIF", e)
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        Toast.makeText(context, "Fehler beim Exportieren", Toast.LENGTH_SHORT).show()
+                                        isExporting = false
+                                    }
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00FFCC)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Gif, contentDescription = "GIF", tint = Color.Black)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("GIF Exportieren", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            val clip = android.content.ClipData.newPlainText("KI Prompt", capture.prompt)
+                            clipboard.setPrimaryClip(clip)
+                            Toast.makeText(context, "Prompt kopiert!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF232A38)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Prompt kopieren", color = Color.White)
+                    }
+                }
             }
         }
     }
@@ -1113,7 +1340,7 @@ fun HistoryItemCard(
     ) {
         // Thumbnail loading
         AsyncImage(
-            model = item.imageAPath,
+            model = item.getThumbnailFile(),
             contentDescription = "Wiggle capture",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
