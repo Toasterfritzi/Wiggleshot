@@ -1,21 +1,32 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Wiggleshot
 
-# Run and deploy your AI Studio app
+Wiggleshot is an Android app that lets you add animated wiggle effects to your photos using AI — powered by the Gemini API.
 
-This contains everything you need to run your app locally.
+> **Open Source** — Licensed under GPL v3.0 with attribution. See [LICENSE.md](./LICENSE.md) for details.
 
-View your app in AI Studio: https://ai.studio/apps/9f357e98-16b9-408e-aea7-7cb289ebad5e
+## Features
 
-## Run Locally
+- Animate still photos with a wiggle/parallax effect
+- Gemini AI integration for depth estimation
+- Clean Material 3 UI built with Jetpack Compose
+- CameraX support for in-app capture
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+## Getting Started
 
+**Prerequisites:** [Android Studio](https://developer.android.com/studio)
 
 1. Open Android Studio
 2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
+3. Allow Android Studio to fix any incompatibilities as it imports the project
+4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` to your Gemini API key (see `.env.example` for an example)
 5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
 6. Run the app on an emulator or physical device
+
+## License
+
+This project is licensed under the **GPL v3.0 with Attribution**. You are free to use, modify, and distribute this code as long as:
+
+- Your project is also open source
+- You link back to this repository: [github.com/Toasterfritzi/Wiggleshot](https://github.com/Toasterfritzi/Wiggleshot)
+
+See [LICENSE.md](./LICENSE.md) for the full license text and third-party licenses.
