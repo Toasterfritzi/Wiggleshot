@@ -25,7 +25,8 @@ class DualCameraManager(
     private val surfaceB: Surface,
     private val width: Int = 1920,
     private val height: Int = 1080,
-    private val onDualCapture: (ByteArray, ByteArray) -> Unit
+    private val onDualCapture: (ByteArray, ByteArray) -> Unit,
+    private val onCaptureFailed: (() -> Unit)? = null
 ) {
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private var cameraDevice: CameraDevice? = null
@@ -115,12 +116,16 @@ class DualCameraManager(
         return Size(4032, 3024)
     }
 
+    private var captureTimeoutRunnable: Runnable? = null
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun checkCaptureComplete() {
         if (bytesA != null && bytesB != null) {
             val a = bytesA!!
             val b = bytesB!!
             bytesA = null
             bytesB = null
+            captureTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
             mainExecutor.execute {
                 onDualCapture(a, b)
             }
@@ -223,8 +228,20 @@ class DualCameraManager(
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             
             captureSession?.capture(builder.build(), null, backgroundHandler)
+            
+            captureTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            captureTimeoutRunnable = Runnable {
+                if (bytesA == null || bytesB == null) {
+                    Log.e("DualCameraManager", "Capture timeout - one or both cameras failed to deliver frames")
+                    bytesA = null
+                    bytesB = null
+                    onCaptureFailed?.invoke()
+                }
+            }
+            mainHandler.postDelayed(captureTimeoutRunnable!!, 3000)
         } catch (e: Exception) {
             Log.e("DualCameraManager", "Error taking picture", e)
+            onCaptureFailed?.invoke()
         }
     }
 

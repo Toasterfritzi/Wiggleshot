@@ -342,6 +342,13 @@ fun PreviewAndControlLayout(
             if (logicalIdA == logicalIdB && primary.id != secondary.id && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                 usingDualManager = true
                 
+                val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                val logicalChars = cameraManager.getCameraCharacteristics(logicalIdA)
+                val sensorOrient = logicalChars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+                
+                textureViewA.sensorOrientation = sensorOrient
+                textureViewB.sensorOrientation = sensorOrient
+
                 val initDualManager = { stA: android.graphics.SurfaceTexture, stB: android.graphics.SurfaceTexture ->
                     dualManager?.stop()
                     val manager = com.example.util.DualCameraManager(
@@ -352,24 +359,32 @@ fun PreviewAndControlLayout(
                         surfaceA = android.view.Surface(stA),
                         surfaceB = android.view.Surface(stB),
                         onDualCapture = { bytesA, bytesB ->
-                            val bitmapA = android.graphics.BitmapFactory.decodeByteArray(bytesA, 0, bytesA.size)
-                            val bitmapB = android.graphics.BitmapFactory.decodeByteArray(bytesB, 0, bytesB.size)
-                            
-                            val cropAndTransform = { bmp: android.graphics.Bitmap, zoom: Float ->
-                                val kw = (bmp.width / zoom).toInt()
-                                val kh = (bmp.height / zoom).toInt()
-                                val x = (bmp.width - kw) / 2
-                                val y = (bmp.height - kh) / 2
-                                val matrix = android.graphics.Matrix()
-                                matrix.postRotate(90f)
-                                matrix.postScale(zoom, zoom)
-                                android.graphics.Bitmap.createBitmap(bmp, x, y, kw, kh, matrix, true)
+                            try {
+                                val bitmapA = android.graphics.BitmapFactory.decodeByteArray(bytesA, 0, bytesA.size)
+                                val bitmapB = android.graphics.BitmapFactory.decodeByteArray(bytesB, 0, bytesB.size)
+                                
+                                val cropAndTransform = { bmp: android.graphics.Bitmap, zoom: Float ->
+                                    val kw = (bmp.width / zoom).toInt()
+                                    val kh = (bmp.height / zoom).toInt()
+                                    val x = (bmp.width - kw) / 2
+                                    val y = (bmp.height - kh) / 2
+                                    val matrix = android.graphics.Matrix()
+                                    matrix.postRotate(sensorOrient.toFloat())
+                                    matrix.postScale(zoom, zoom)
+                                    android.graphics.Bitmap.createBitmap(bmp, x, y, kw, kh, matrix, true)
+                                }
+                                
+                                val aRot = cropAndTransform(bitmapA, viewModel.uiState.value.zoomA)
+                                val bRot = cropAndTransform(bitmapB, viewModel.uiState.value.zoomB)
+                                
+                                onCapture(aRot, bRot)
+                            } catch (e: Exception) {
+                                android.util.Log.e("WiggleApp", "Error processing dual capture", e)
+                            } finally {
+                                isCapturing = false
                             }
-                            
-                            val aRot = cropAndTransform(bitmapA, viewModel.uiState.value.zoomA)
-                            val bRot = cropAndTransform(bitmapB, viewModel.uiState.value.zoomB)
-                            
-                            onCapture(aRot, bRot)
+                        },
+                        onCaptureFailed = {
                             isCapturing = false
                         }
                     )
@@ -577,45 +592,34 @@ fun PreviewAndControlLayout(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Split screen viewfinder
-        Column(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
-                AndroidView(
-                    factory = { textureViewA }, 
-                    modifier = Modifier.fillMaxSize().alpha(if (usingDualManager) 1f else 0f),
-                    update = { view -> view.updateZoom(uiState.zoomA) }
-                )
-                AndroidView(
-                    factory = { previewViewA }, 
-                    modifier = Modifier.fillMaxSize().alpha(if (!usingDualManager) 1f else 0f)
-                )
-                Text(
-                    text = "A (Zoom sync)",
-                    color = Color(0xAAFFFFFF),
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
-                )
-            }
-            Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FFCC)))
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().clip(androidx.compose.ui.graphics.RectangleShape)) {
-                AndroidView(
-                    factory = { textureViewB }, 
-                    modifier = Modifier.fillMaxSize().alpha(if (usingDualManager) 1f else 0f),
-                    update = { view -> view.updateZoom(uiState.zoomB) }
-                )
-                AndroidView(
-                    factory = { previewViewB }, 
-                    modifier = Modifier.fillMaxSize().alpha(if (!usingDualManager) 1f else 0f)
-                )
-                Text(
-                    text = "B",
-                    color = Color(0xAAFFFFFF),
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
-                )
-            }
+        // Primary Screen Viewfinder (Camera A)
+        Box(modifier = Modifier.fillMaxSize()) {
+            AndroidView(
+                factory = { textureViewA }, 
+                modifier = Modifier.fillMaxSize().alpha(if (usingDualManager) 1f else 0f),
+                update = { view -> view.updateZoom(uiState.zoomA) }
+            )
+            AndroidView(
+                factory = { previewViewA }, 
+                modifier = Modifier.fillMaxSize().alpha(if (!usingDualManager) 1f else 0f)
+            )
+        }
+
+        // Hidden Secondary Viewfinder (Camera B) - Must exist for SurfaceTexture to be active & available
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .alpha(0.01f)
+        ) {
+            AndroidView(
+                factory = { textureViewB }, 
+                modifier = Modifier.fillMaxSize().alpha(if (usingDualManager) 1f else 0f),
+                update = { view -> view.updateZoom(uiState.zoomB) }
+            )
+            AndroidView(
+                factory = { previewViewB }, 
+                modifier = Modifier.fillMaxSize().alpha(if (!usingDualManager) 1f else 0f)
+            )
         }
         
         // Settings Overlay / Lens Selection Top Left
@@ -702,7 +706,7 @@ fun PreviewAndControlLayout(
                     color = Color(0xFF00FFCC)
                 )
                 Text(
-                    text = "Zwei Objektive live",
+                    text = "Hauptlinse live",
                     fontSize = 8.sp,
                     color = Color.LightGray
                 )
@@ -734,8 +738,8 @@ fun PreviewAndControlLayout(
                     Slider(
                         value = uiState.zoomA,
                         onValueChange = { viewModel.setZoomA(it) },
-                        valueRange = 1f..10f,
-                        steps = 17,
+                        valueRange = 1f..5f,
+                        steps = 39,
                         modifier = Modifier.height(24.dp)
                     )
                 }
@@ -747,17 +751,44 @@ fun PreviewAndControlLayout(
                     .padding(8.dp)
             ) {
                 Column {
-                    Text(
-                        text = "ZOOM B: ${String.format(java.util.Locale.US, "%.1fx", uiState.zoomB)}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "ZOOM B: ${String.format(java.util.Locale.US, "%.2fx", uiState.zoomB)}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    if (uiState.isAutoZoomApplied) Color(0xFF00FFCC) else Color(0xFF232A38),
+                                    RoundedCornerShape(4.dp)
+                                )
+                                .clickable {
+                                    val w = textureViewA.width
+                                    val h = textureViewA.height
+                                    val bmpA = if (w > 0 && h > 0) textureViewA.getBitmap(w, h) else textureViewA.bitmap
+                                    val bmpB = if (w > 0 && h > 0) textureViewB.getBitmap(w, h) else textureViewB.bitmap
+                                    viewModel.autoCalibrateFOV(bmpA, bmpB)
+                                }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "AUTO",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                color = if (uiState.isAutoZoomApplied) Color.Black else Color.White
+                            )
+                        }
+                    }
                     Slider(
                         value = uiState.zoomB,
                         onValueChange = { viewModel.setZoomB(it) },
-                        valueRange = 1f..10f,
-                        steps = 17,
+                        valueRange = 1f..3f,
                         modifier = Modifier.height(24.dp)
                     )
                 }
@@ -806,29 +837,36 @@ fun PreviewAndControlLayout(
 }
 
 
-fun updateTextureViewTransform(textureView: android.view.TextureView, viewWidth: Float, viewHeight: Float, zoom: Float) {
+fun updateTextureViewTransform(
+    textureView: android.view.TextureView, 
+    viewWidth: Float, 
+    viewHeight: Float, 
+    zoom: Float,
+    sensorOrientation: Int = 90
+) {
     val matrix = android.graphics.Matrix()
     if (viewWidth == 0f || viewHeight == 0f) return
 
     val centerX = viewWidth / 2f
     val centerY = viewHeight / 2f
 
-    // We assume the camera buffer is generally a 4:3 landscape stream like 1440x1080 or 4032x3024
-    // We'll calculate purely on 4:3 landscape ratio to keep it aspect-perfect
+    // We assume the camera buffer is generally a 4:3 landscape stream like 1440x1080
     val bufferWidth = 1440f
     val bufferHeight = 1080f
 
     // 1. Un-stretch to actual stream ratio
     matrix.postScale(bufferWidth / viewWidth, bufferHeight / viewHeight, centerX, centerY)
     
-    // 2. Rotate it so it's portrait
-    matrix.postRotate(90f, centerX, centerY)
+    // 2. Rotate it based on sensor orientation
+    matrix.postRotate(sensorOrientation.toFloat(), centerX, centerY)
     
     // 3. Center crop to fill the container view without distortion
-    val scale = maxOf(viewWidth / bufferHeight, viewHeight / bufferWidth)
-    matrix.postScale(scale, scale, centerX, centerY)
+    val rotatedWidth = if (sensorOrientation % 180 != 0) bufferHeight else bufferWidth
+    val rotatedHeight = if (sensorOrientation % 180 != 0) bufferWidth else bufferHeight
+    val scaleFill = maxOf(viewWidth / rotatedWidth, viewHeight / rotatedHeight)
+    matrix.postScale(scaleFill, scaleFill, centerX, centerY)
     
-    // 4. Apply manual zoom crop
+    // 4. Apply manual/auto zoom crop
     matrix.postScale(zoom, zoom, centerX, centerY)
     
     textureView.setTransform(matrix)
@@ -836,6 +874,13 @@ fun updateTextureViewTransform(textureView: android.view.TextureView, viewWidth:
 
 class ZoomableTextureView(context: Context) : android.view.TextureView(context) {
     var currentZoom: Float = 1f
+    var sensorOrientation: Int = 90
+        set(value) {
+            field = value
+            if (lastWidth > 0 && lastHeight > 0) {
+                updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom, field)
+            }
+        }
     var lastWidth: Float = 0f
     var lastHeight: Float = 0f
 
@@ -843,14 +888,14 @@ class ZoomableTextureView(context: Context) : android.view.TextureView(context) 
         addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
             lastWidth = (right - left).toFloat()
             lastHeight = (bottom - top).toFloat()
-            updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom)
+            updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom, sensorOrientation)
         }
     }
 
     fun updateZoom(newZoom: Float) {
         currentZoom = newZoom
         if (lastWidth > 0 && lastHeight > 0) {
-            updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom)
+            updateTextureViewTransform(this, lastWidth, lastHeight, currentZoom, sensorOrientation)
         }
     }
 }
